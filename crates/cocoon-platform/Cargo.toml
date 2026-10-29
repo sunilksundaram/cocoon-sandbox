@@ -1,0 +1,24 @@
+[package]
+name = "cocoon-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Platform-specific sandboxing and isolation drivers for Cocoon"
+
+[dependencies]
+cocoon-core.workspace = true
+cocoon-fs.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux native namespace bindings

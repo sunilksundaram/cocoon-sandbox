@@ -1,0 +1,23 @@
+[package]
+name = "cocoon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI executable for Cocoon sandbox"
+
+[[bin]]
+name = "cocoon"
+path = "src/main.rs"
+
+[dependencies]
+cocoon-core.workspace = true
+cocoon-fs.workspace = true
+cocoon-platform.workspace = true
+cocoon-runtimes.workspace = true
+
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

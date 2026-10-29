@@ -1,0 +1,12 @@
+[package]
+name = "cocoon-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Virtual filesystem and read-only projection layer for Cocoon sandbox"
+
+[dependencies]
+cocoon-core.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
