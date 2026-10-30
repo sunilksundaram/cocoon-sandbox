@@ -50,7 +50,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: cocoon-macos-aarch64.tar.gz
             use_cross: false
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: cocoon-macos-x86_64.tar.gz
             use_cross: false
@@ -139,7 +139,7 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
 
     steps:
