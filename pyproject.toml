@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cocoon-sandbox"
+version = "0.1.0"
+description = "Lightweight cross-platform sandbox with virtual and read-only filesystems for AI agents"
+readme = "README.md"
+authors = [
+    { name = "Sunil K Sundaram" }
+]
+license = { text = "MIT OR Apache-2.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.8"
+
+[project.urls]
+Homepage = "https://github.com/sunilksundaram/cocoon"
+Repository = "https://github.com/sunilksundaram/cocoon"
+Issues = "https://github.com/sunilksundaram/cocoon/issues"
+Documentation = "https://github.com/sunilksundaram/cocoon#readme"
+
+[tool.maturin]
+manifest-path = "crates/cocoon-cli/Cargo.toml"
+bindings = "bin"
+strip = true
+

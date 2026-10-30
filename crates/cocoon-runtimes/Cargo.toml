@@ -3,7 +3,9 @@ name = "cocoon-runtimes"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Runtime presets and execution helpers for Python, Node, PowerShell, Bash, and Rust"
+readme = "../../README.md"
 
 [dependencies]
 cocoon-core.workspace = true

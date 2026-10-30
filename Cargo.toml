@@ -17,10 +17,10 @@ description = "A lightweight cross-platform sandbox with virtual and read-only f
 repository = "https://github.com/sunilksundaram/cocoon"
 
 [workspace.dependencies]
-cocoon-core = { path = "crates/cocoon-core" }
-cocoon-fs = { path = "crates/cocoon-fs" }
-cocoon-platform = { path = "crates/cocoon-platform" }
-cocoon-runtimes = { path = "crates/cocoon-runtimes" }
+cocoon-core = { version = "0.1.0", path = "crates/cocoon-core" }
+cocoon-fs = { version = "0.1.0", path = "crates/cocoon-fs" }
+cocoon-platform = { version = "0.1.0", path = "crates/cocoon-platform" }
+cocoon-runtimes = { version = "0.1.0", path = "crates/cocoon-runtimes" }
 
 anyhow = "1.0"
 thiserror = "2.0"

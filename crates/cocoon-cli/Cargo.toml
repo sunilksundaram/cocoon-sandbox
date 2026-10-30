@@ -1,9 +1,11 @@
 [package]
-name = "cocoon-cli"
+name = "cocoon-sandbox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CLI executable for Cocoon sandbox"
+repository.workspace = true
+description = "Lightweight cross-platform sandbox with virtual and read-only filesystems for AI agents and code execution"
+readme = "../../README.md"
 
 [[bin]]
 name = "cocoon"

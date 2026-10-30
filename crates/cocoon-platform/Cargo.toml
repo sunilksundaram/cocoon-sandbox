@@ -3,7 +3,9 @@ name = "cocoon-platform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Platform-specific sandboxing and isolation drivers for Cocoon"
+readme = "../../README.md"
 
 [dependencies]
 cocoon-core.workspace = true

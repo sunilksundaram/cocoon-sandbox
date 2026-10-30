@@ -33,14 +33,19 @@ Cocoon is a **native systems binary** written in Rust. It does **not** require D
 
 ## 2. Quick Installation
 
-### Option A: Via Cargo (Recommended)
-If you already have Rust and Cargo installed, install the global CLI with a single command:
-
+### Option A: Via Python / PyPI (Instant Pre-Compiled Binary)
 ```bash
-cargo install --git https://github.com/sunilksundaram/cocoon.git cocoon-cli
+pip install cocoon-sandbox
 ```
+*(Installs the standalone `cocoon` native binary into your active Python environment's path).*
 
-### Option B: Local Project Installation
+### Option B: Via Cargo / Crates.io
+```bash
+cargo install cocoon-sandbox
+```
+*(Builds and installs `cocoon` directly into `~/.cargo/bin` or `%USERPROFILE%\.cargo\bin`).*
+
+### Option C: Local Project Installation
 If you have cloned the repository locally:
 
 ```bash

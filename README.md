@@ -45,6 +45,20 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 
 ---
 
+## 📦 Installation
+
+Install Cocoon using your preferred package manager:
+
+```bash
+# Via Python / PyPI (Pre-compiled native binary, zero Rust toolchain needed)
+pip install cocoon-sandbox
+
+# Via Rust / Cargo (From Crates.io)
+cargo install cocoon-sandbox
+```
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Inspect System Capabilities

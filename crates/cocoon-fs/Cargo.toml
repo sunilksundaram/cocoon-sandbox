@@ -3,7 +3,9 @@ name = "cocoon-fs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Virtual filesystem and read-only projection layer for Cocoon sandbox"
+readme = "../../README.md"
 
 [dependencies]
 cocoon-core.workspace = true
