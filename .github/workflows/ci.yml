@@ -1,4 +1,4 @@
-name: CI (Build & Test)
+name: CI (Security, Static Analysis, Unit & Regression Tests)
 
 on:
   push:
@@ -7,9 +7,53 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
-  check-and-test:
-    name: Test on ${{ matrix.os }}
+  # =============================================================
+  # 1. CVE & DEPENDENCY VULNERABILITY SCANNING
+  # =============================================================
+  cve-security-audit:
+    name: CVE Vulnerability & Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Security audit with RustSec (CVE Scanner)
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # =============================================================
+  # 2. STATIC ANALYSIS (Clippy & Rustfmt)
+  # =============================================================
+  static-analysis:
+    name: Static Analysis (Clippy & Fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Static Analysis (clippy)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # =============================================================
+  # 3. UNIT & REGRESSION TESTING (Cross-Platform Matrix)
+  # =============================================================
+  unit-and-regression-tests:
+    name: Tests on ${{ matrix.os }}
+    needs: [static-analysis]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,11 +68,11 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Check Workspace
+      - name: Workspace Compilation Check
         run: cargo check --all-targets
 
-      - name: Run Tests
-        run: cargo test --all
+      - name: Execute Unit & Regression Tests
+        run: cargo test --all --verbose
 
-      - name: Build Release Binary
+      - name: Build Optimized Release Binary
         run: cargo build --release

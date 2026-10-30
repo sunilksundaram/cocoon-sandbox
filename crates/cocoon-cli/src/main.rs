@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use cocoon_core::{MountRule, MountType, ResourceLimits, SandboxConfig};
 use cocoon_fs::VirtualView;
 use cocoon_platform::get_default_driver;
-use cocoon_runtimes::{RuntimeKind, RuntimePreset};
+use cocoon_runtimes::{which, RuntimeKind, RuntimePreset};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -45,7 +45,12 @@ enum Commands {
         file: Option<PathBuf>,
 
         /// Working directory inside the sandbox where commands execute and files can be created/modified
-        #[arg(short = 'w', long = "work", visible_alias = "workdir", value_name = "DIR")]
+        #[arg(
+            short = 'w',
+            long = "work",
+            visible_alias = "workdir",
+            value_name = "DIR"
+        )]
         workdir: Option<PathBuf>,
 
         /// Custom temporary directory for process temp files and caches (sets TMP/TEMP/TMPDIR)
@@ -80,7 +85,12 @@ enum Commands {
         read_only: Vec<PathBuf>,
 
         /// Working directory inside the sandbox (default: ephemeral shared workspace)
-        #[arg(short = 'w', long = "work", visible_alias = "workdir", value_name = "DIR")]
+        #[arg(
+            short = 'w',
+            long = "work",
+            visible_alias = "workdir",
+            value_name = "DIR"
+        )]
         workdir: Option<PathBuf>,
 
         /// Custom temporary directory (sets TMP/TEMP/TMPDIR)
@@ -142,7 +152,14 @@ fn main() -> Result<()> {
             println!("Cocoon Sandbox v{}", env!("CARGO_PKG_VERSION"));
             println!("----------------------------------------");
             println!("Active Driver : {}", driver.name());
-            println!("Driver Status : {}", if driver.is_available() { "Available (Active)" } else { "Unavailable" });
+            println!(
+                "Driver Status : {}",
+                if driver.is_available() {
+                    "Available (Active)"
+                } else {
+                    "Unavailable"
+                }
+            );
             println!("Target OS     : {}", std::env::consts::OS);
             println!("Target Arch   : {}", std::env::consts::ARCH);
             println!("\nDetected System Runtimes:");
@@ -160,8 +177,12 @@ fn main() -> Result<()> {
                 ("PHP", &["php"][..]),
                 ("Lua", &["lua", "luajit"][..]),
             ] {
-                let found = exes.iter().any(|&e| which(e).is_ok());
-                println!("  - {:<12} : {}", name, if found { "✓ Ready" } else { "✗ Not found" });
+                let found = exes.iter().any(|&e| which(e).is_some());
+                println!(
+                    "  - {:<12} : {}",
+                    name,
+                    if found { "✓ Ready" } else { "✗ Not found" }
+                );
             }
             Ok(())
         }
@@ -207,9 +228,7 @@ fn main() -> Result<()> {
             }
 
             let (executable, args) = if let Some(rt_str) = runtime {
-                let kind: RuntimeKind = rt_str
-                    .parse()
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                let kind: RuntimeKind = rt_str.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
                 RuntimePreset::configure(kind, code.as_deref(), file.as_deref())
                     .context("Failed to configure runtime preset")?
             } else if !raw_cmd.is_empty() {
@@ -243,7 +262,9 @@ fn main() -> Result<()> {
                 stdin_data: None,
             };
 
-            let result = driver.execute(&config).context("Sandbox execution failed")?;
+            let result = driver
+                .execute(&config)
+                .context("Sandbox execution failed")?;
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -272,7 +293,9 @@ fn main() -> Result<()> {
             json,
         } => {
             if steps.is_empty() {
-                anyhow::bail!("No pipeline steps specified. Use --step 'runtime:code' to add steps.");
+                anyhow::bail!(
+                    "No pipeline steps specified. Use --step 'runtime:code' to add steps."
+                );
             }
 
             let mut mounts = Vec::new();
@@ -294,12 +317,7 @@ fn main() -> Result<()> {
             }
 
             // Setup the shared virtual filesystem view ONCE for all steps in the pipeline
-            let vfs = VirtualView::setup(
-                &mounts,
-                tempdir.as_deref(),
-                workdir.as_deref(),
-                &copy,
-            )?;
+            let vfs = VirtualView::setup(&mounts, tempdir.as_deref(), workdir.as_deref(), &copy)?;
             let _ro_guard = vfs.lock_read_only()?;
             let shared_workdir = vfs.scratchpad.workspace().to_path_buf();
 
@@ -312,7 +330,10 @@ fn main() -> Result<()> {
             for (idx, step_str) in steps.iter().enumerate() {
                 let (rt_name, content) = match step_str.split_once(':') {
                     Some((r, c)) => (r.trim(), c.trim()),
-                    None => anyhow::bail!("Invalid step format '{}'. Expected '<runtime>:<code or file>'", step_str),
+                    None => anyhow::bail!(
+                        "Invalid step format '{}'. Expected '<runtime>:<code or file>'",
+                        step_str
+                    ),
                 };
 
                 let kind: RuntimeKind = rt_name.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -372,7 +393,11 @@ fn main() -> Result<()> {
                 if !step_success {
                     overall_success = false;
                     if !json {
-                        eprintln!("[cocoon pipeline] Step {} failed (exit code {}). Aborting pipeline.", idx + 1, result.exit_code);
+                        eprintln!(
+                            "[cocoon pipeline] Step {} failed (exit code {}). Aborting pipeline.",
+                            idx + 1,
+                            result.exit_code
+                        );
                     }
                     break;
                 }
@@ -395,23 +420,4 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn which(name: &str) -> Result<PathBuf, ()> {
-    if let Ok(paths) = std::env::var("PATH") {
-        let separator = if cfg!(windows) { ';' } else { ':' };
-        for dir in paths.split(separator) {
-            let p = std::path::Path::new(dir).join(name);
-            if p.is_file() {
-                return Ok(p);
-            }
-            if cfg!(windows) {
-                let p_exe = std::path::Path::new(dir).join(format!("{}.exe", name));
-                if p_exe.is_file() {
-                    return Ok(p_exe);
-                }
-            }
-        }
-    }
-    Err(())
 }

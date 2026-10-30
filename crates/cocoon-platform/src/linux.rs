@@ -1,6 +1,4 @@
-use cocoon_core::{
-    CocoonError, ExecutionResult, MountType, SandboxConfig, SandboxDriver,
-};
+use cocoon_core::{CocoonError, ExecutionResult, MountType, SandboxConfig, SandboxDriver};
 use cocoon_fs::VirtualView;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -9,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Linux Sandbox Driver using Bubblewrap or Linux User Namespaces
+#[derive(Default)]
 pub struct LinuxNamespaceDriver;
 
 impl LinuxNamespaceDriver {

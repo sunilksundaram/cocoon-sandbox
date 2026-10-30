@@ -128,3 +128,66 @@ impl ExecutionResult {
         self.exit_code == 0 && !self.timed_out && !self.oom_killed
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resource_limits_default() {
+        let limits = ResourceLimits::default();
+        assert_eq!(limits.timeout, Some(Duration::from_secs(30)));
+        assert_eq!(limits.memory_limit_mb, None);
+        assert!(limits.allow_network);
+    }
+
+    #[test]
+    fn test_mount_rule_constructors() {
+        let ro = MountRule::read_only("/path/to/ro");
+        assert_eq!(ro.mount_type, MountType::ReadOnly);
+        assert_eq!(ro.host_path, PathBuf::from("/path/to/ro"));
+
+        let sp = MountRule::scratchpad("/path/to/scratch");
+        assert_eq!(sp.mount_type, MountType::Scratchpad);
+        assert_eq!(sp.host_path, PathBuf::from("/path/to/scratch"));
+    }
+
+    #[test]
+    fn test_execution_result_success_conditions() {
+        let ok = ExecutionResult {
+            exit_code: 0,
+            stdout: "ok".into(),
+            stderr: String::new(),
+            duration_ms: 10.0,
+            timed_out: false,
+            oom_killed: false,
+        };
+        assert!(ok.success());
+
+        let nonzero = ExecutionResult {
+            exit_code: 1,
+            ..ok.clone()
+        };
+        assert!(!nonzero.success());
+
+        let timed_out = ExecutionResult {
+            timed_out: true,
+            ..ok.clone()
+        };
+        assert!(!timed_out.success());
+
+        let oom = ExecutionResult {
+            oom_killed: true,
+            ..ok
+        };
+        assert!(!oom.success());
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let config = SandboxConfig::default();
+        let json = serde_json::to_string(&config).expect("Must serialize");
+        let deserialized: SandboxConfig = serde_json::from_str(&json).expect("Must deserialize");
+        assert_eq!(deserialized.limits.timeout, Some(Duration::from_secs(30)));
+    }
+}

@@ -1,6 +1,4 @@
-use cocoon_core::{
-    CocoonError, ExecutionResult, ResourceLimits, SandboxConfig, SandboxDriver,
-};
+use cocoon_core::{CocoonError, ExecutionResult, ResourceLimits, SandboxConfig, SandboxDriver};
 use cocoon_fs::VirtualView;
 use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
@@ -12,12 +10,13 @@ use tracing::debug;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
+#[derive(Default)]
 pub struct WindowsJobObjectDriver;
 
 impl WindowsJobObjectDriver {
@@ -123,9 +122,24 @@ impl SandboxDriver for WindowsJobObjectDriver {
             cmd.env_clear();
             // Retain minimal critical Windows environment variables
             for var in &[
-                "SystemRoot", "SystemDrive", "windir", "PATH", "PATHEXT",
-                "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOMEDRIVE", "HOMEPATH",
-                "GOROOT", "GOPATH", "JAVA_HOME", "CARGO_HOME", "RUSTUP_HOME", "BUN_INSTALL", "DENO_DIR"
+                "SystemRoot",
+                "SystemDrive",
+                "windir",
+                "PATH",
+                "PATHEXT",
+                "COMSPEC",
+                "USERPROFILE",
+                "LOCALAPPDATA",
+                "APPDATA",
+                "HOMEDRIVE",
+                "HOMEPATH",
+                "GOROOT",
+                "GOPATH",
+                "JAVA_HOME",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+                "BUN_INSTALL",
+                "DENO_DIR",
             ] {
                 if let Ok(val) = std::env::var(var) {
                     cmd.env(var, val);

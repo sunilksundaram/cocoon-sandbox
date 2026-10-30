@@ -113,3 +113,36 @@ impl Scratchpad {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scratchpad_ephemeral_creation() {
+        let scratchpad = Scratchpad::new().expect("Failed to create scratchpad");
+        assert!(scratchpad.root().exists());
+        assert!(scratchpad.workspace().exists());
+    }
+
+    #[test]
+    fn test_scratchpad_stage_copy_file() {
+        let scratchpad = Scratchpad::new().expect("Failed to create scratchpad");
+        let temp_src = tempfile::NamedTempFile::new().expect("Failed to create temp source");
+        std::fs::write(temp_src.path(), "hello cocoon test").expect("Failed to write");
+
+        let staged = scratchpad
+            .stage_copy(temp_src.path())
+            .expect("Stage copy should succeed");
+        assert!(staged.exists());
+        let content = std::fs::read_to_string(&staged).expect("Read staged file");
+        assert_eq!(content, "hello cocoon test");
+    }
+
+    #[test]
+    fn test_scratchpad_stage_copy_nonexistent() {
+        let scratchpad = Scratchpad::new().expect("Failed to create scratchpad");
+        let result = scratchpad.stage_copy(Path::new("definitely_nonexistent_file_12345"));
+        assert!(result.is_err());
+    }
+}

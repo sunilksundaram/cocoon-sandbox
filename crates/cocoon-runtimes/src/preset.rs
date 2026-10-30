@@ -239,7 +239,7 @@ impl RuntimePreset {
     /// Finds the first matching executable name available in the system PATH
     pub fn find_executable(candidates: &[&str]) -> Result<PathBuf, CocoonError> {
         for candidate in candidates {
-            if let Ok(path) = which(candidate) {
+            if let Some(path) = which(candidate) {
                 return Ok(path);
             }
         }
@@ -249,21 +249,66 @@ impl RuntimePreset {
 }
 
 /// Simple PATH resolver
-pub fn which(name: &str) -> Result<PathBuf, ()> {
+pub fn which(name: &str) -> Option<PathBuf> {
     if let Ok(paths) = std::env::var("PATH") {
         let separator = if cfg!(windows) { ';' } else { ':' };
         for dir in paths.split(separator) {
             let p = Path::new(dir).join(name);
             if p.is_file() {
-                return Ok(p);
+                return Some(p);
             }
             if cfg!(windows) {
                 let p_exe = Path::new(dir).join(format!("{}.exe", name));
                 if p_exe.is_file() {
-                    return Ok(p_exe);
+                    return Some(p_exe);
                 }
             }
         }
     }
-    Err(())
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_kind_from_str() {
+        assert_eq!(
+            "python".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::Python
+        );
+        assert_eq!("py".parse::<RuntimeKind>().unwrap(), RuntimeKind::Python);
+        assert_eq!("node".parse::<RuntimeKind>().unwrap(), RuntimeKind::Node);
+        assert_eq!("bun".parse::<RuntimeKind>().unwrap(), RuntimeKind::Bun);
+        assert_eq!(
+            "pwsh".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::PowerShell
+        );
+        assert_eq!("bash".parse::<RuntimeKind>().unwrap(), RuntimeKind::Bash);
+        assert_eq!("rust".parse::<RuntimeKind>().unwrap(), RuntimeKind::Rust);
+        assert_eq!("go".parse::<RuntimeKind>().unwrap(), RuntimeKind::Go);
+        assert!("invalid_xyz".parse::<RuntimeKind>().is_err());
+    }
+
+    #[test]
+    fn test_python_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Python, Some("print('unit test')"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"-B".to_string()));
+        assert!(args.contains(&"-c".to_string()));
+        assert!(args.contains(&"print('unit test')".to_string()));
+    }
+
+    #[test]
+    fn test_node_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Node, Some("console.log('test')"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"-e".to_string()));
+        assert!(args.contains(&"console.log('test')".to_string()));
+    }
 }

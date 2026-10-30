@@ -238,7 +238,10 @@ impl VirtualView {
         // Redirect pip cache to scratchpad
         let pip_cache = self.scratchpad.root().join("pip-cache");
         let _ = std::fs::create_dir_all(&pip_cache);
-        envs.insert("PIP_CACHE_DIR".into(), pip_cache.to_string_lossy().to_string());
+        envs.insert(
+            "PIP_CACHE_DIR".into(),
+            pip_cache.to_string_lossy().to_string(),
+        );
 
         // Redirect Python user install directory to workspace so pip install --user installs into the sandbox
         envs.insert(
