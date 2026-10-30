@@ -1,10 +1,13 @@
-use cocoon_core::{CocoonError, ExecutionResult, MountType, SandboxConfig, SandboxDriver};
+use cocoon_core::{
+    CocoonError, ExecutionResult, MountType, SandboxConfig, SandboxDriver, TerminationReason,
+};
 use cocoon_fs::VirtualView;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 /// Linux Sandbox Driver using Bubblewrap or Linux User Namespaces
 #[derive(Default)]
@@ -46,37 +49,43 @@ impl SandboxDriver for LinuxNamespaceDriver {
         )?;
         let safe_env = vfs.safe_env_redirects();
 
-        // If bwrap is available, run unprivileged kernel-level sandbox
-        let mut cmd = if self.has_bwrap() {
-            let mut b = Command::new("bwrap");
-            b.arg("--unshare-all")
-                .arg("--die-with-parent")
-                .arg("--dev")
-                .arg("/dev")
-                .arg("--proc")
-                .arg("/proc")
-                .arg("--tmpfs")
-                .arg("/tmp");
+        // Enforce fail-closed policy: Bubblewrap is required for namespace isolation
+        if !self.has_bwrap() {
+            return Err(CocoonError::SecurityViolation(
+                "Bubblewrap (bwrap) is required for sandbox isolation on Linux. Falling back to an unconfined host process is forbidden.".into(),
+            ));
+        }
 
-            // Bind mounts
-            for mount in &vfs.validated_mounts {
-                let p = mount.host_path.to_string_lossy().to_string();
-                match mount.mount_type {
-                    MountType::ReadOnly => {
-                        b.arg("--ro-bind").arg(&p).arg(&p);
-                    }
-                    MountType::ReadWrite | MountType::Scratchpad => {
-                        b.arg("--bind").arg(&p).arg(&p);
-                    }
+        let mut b = Command::new("bwrap");
+        b.arg("--unshare-all")
+            .arg("--die-with-parent")
+            .arg("--dev")
+            .arg("/dev")
+            .arg("--proc")
+            .arg("/proc")
+            .arg("--tmpfs")
+            .arg("/tmp");
+
+        // Network isolation
+        if config.limits.allow_network {
+            b.arg("--share-net");
+        }
+
+        // Bind mounts
+        for mount in &vfs.validated_mounts {
+            let p = mount.host_path.to_string_lossy().to_string();
+            match mount.mount_type {
+                MountType::ReadOnly => {
+                    b.arg("--ro-bind").arg(&p).arg(&p);
+                }
+                MountType::ReadWrite | MountType::Scratchpad => {
+                    b.arg("--bind").arg(&p).arg(&p);
                 }
             }
+        }
 
-            b.arg("--").arg(&config.executable);
-            b
-        } else {
-            // Direct command execution with virtual environment overrides
-            Command::new(&config.executable)
-        };
+        b.arg("--").arg(&config.executable);
+        let mut cmd = b;
 
         cmd.args(&config.args);
 
@@ -105,6 +114,43 @@ impl SandboxDriver for LinuxNamespaceDriver {
         });
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+
+        // Apply Linux resource caps (memory limit, process limit, and file size quota)
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            let mem_mb = config.limits.memory_limit_mb;
+            let max_p = config.limits.max_processes;
+            let disk_mb = config.limits.disk_limit_mb;
+            unsafe {
+                cmd.pre_exec(move || {
+                    if let Some(mb) = mem_mb {
+                        let bytes = (mb * 1024 * 1024) as u64;
+                        let rlim = libc::rlimit {
+                            rlim_cur: bytes,
+                            rlim_max: bytes,
+                        };
+                        libc::setrlimit(libc::RLIMIT_AS, &rlim);
+                    }
+                    if let Some(procs) = max_p {
+                        let rlim = libc::rlimit {
+                            rlim_cur: procs as u64,
+                            rlim_max: procs as u64,
+                        };
+                        libc::setrlimit(libc::RLIMIT_NPROC, &rlim);
+                    }
+                    if let Some(mb) = disk_mb {
+                        let bytes = (mb * 1024 * 1024) as u64;
+                        let rlim = libc::rlimit {
+                            rlim_cur: bytes,
+                            rlim_max: bytes,
+                        };
+                        libc::setrlimit(libc::RLIMIT_FSIZE, &rlim);
+                    }
+                    Ok(())
+                });
+            }
+        }
 
         let mut child = cmd.spawn().map_err(CocoonError::Io)?;
 
@@ -138,6 +184,7 @@ impl SandboxDriver for LinuxNamespaceDriver {
 
         let timeout = config.limits.timeout;
         let mut timed_out = false;
+        let mut termination_reason = None;
         let mut exit_code = -1;
 
         if let Some(duration) = timeout {
@@ -153,6 +200,14 @@ impl SandboxDriver for LinuxNamespaceDriver {
                     Ok(None) => {
                         if Instant::now() >= deadline {
                             timed_out = true;
+                            termination_reason = Some(TerminationReason::Timeout);
+                            warn!(
+                                target: "cocoon::security",
+                                event = "execution_timeout",
+                                executable = %config.executable.display(),
+                                timeout_ms = duration.as_millis(),
+                                "Process exceeded execution timeout limit on Linux; terminating child"
+                            );
                             let _ = child.kill();
                             let _ = child.wait();
                             break;
@@ -176,6 +231,14 @@ impl SandboxDriver for LinuxNamespaceDriver {
         let stderr_bytes = stderr_rx.recv().unwrap_or_default();
         let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
+        // Security check: verify no junctions or symlinks inside workspace escape to host files
+        vfs.scratchpad.verify_no_breakouts()?;
+
+        // Security check: enforce disk write quota if configured
+        if let Some(disk_mb) = config.limits.disk_limit_mb {
+            vfs.scratchpad.verify_disk_quota(disk_mb)?;
+        }
+
         Ok(ExecutionResult {
             exit_code,
             stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
@@ -183,6 +246,10 @@ impl SandboxDriver for LinuxNamespaceDriver {
             duration_ms,
             timed_out,
             oom_killed: false,
+            termination_reason,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            peak_memory_mb: None,
         })
     }
 }

@@ -25,6 +25,10 @@ fn regression_telemetry_json_schema_matches_agent_spec() {
         duration_ms: 12.5,
         timed_out: false,
         oom_killed: false,
+        termination_reason: None,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        peak_memory_mb: None,
     };
 
     let json_val = serde_json::to_value(&result).expect("Must serialize to json value");
@@ -37,6 +41,38 @@ fn regression_telemetry_json_schema_matches_agent_spec() {
     );
     assert!(json_val.get("timed_out").is_some(), "Missing 'timed_out'");
     assert!(json_val.get("oom_killed").is_some(), "Missing 'oom_killed'");
+}
+
+#[test]
+fn regression_default_network_is_denied() {
+    // Invariant: Cocoon must enforce default-deny network access to prevent credential exfiltration
+    let limits = ResourceLimits::default();
+    assert!(
+        !limits.allow_network,
+        "Regression: Default network access must be false (default-deny)"
+    );
+}
+
+#[test]
+fn regression_default_max_processes_is_enforced() {
+    // Invariant: Cocoon must enforce active process cap to prevent fork bombs
+    let limits = ResourceLimits::default();
+    assert_eq!(
+        limits.max_processes,
+        Some(32),
+        "Regression: Default max active processes was modified"
+    );
+}
+
+#[test]
+fn regression_default_disk_limit_is_enforced() {
+    // Invariant: Cocoon must enforce storage write quota to prevent disk exhaustion DoS
+    let limits = ResourceLimits::default();
+    assert_eq!(
+        limits.disk_limit_mb,
+        Some(512),
+        "Regression: Default disk limit was modified"
+    );
 }
 
 #[test]
@@ -60,11 +96,19 @@ fn regression_scratchpad_cleanup_on_drop() {
 
 #[test]
 fn regression_preset_runtime_resolution() {
-    // Invariant: Python preset must always include bytecode cache suppression flag (-B)
+    // Invariant: Python preset must always include bytecode cache suppression flag (-B) and isolation flags (-I, -S)
     let (_, args) =
         RuntimePreset::configure(RuntimeKind::Python, Some("print('regression test')"), None)
             .expect("Python configure should succeed");
 
+    assert!(
+        args.contains(&"-I".to_string()),
+        "Regression: Python preset omitted -I flag (isolated mode)"
+    );
+    assert!(
+        args.contains(&"-S".to_string()),
+        "Regression: Python preset omitted -S flag (site-packages suppression)"
+    );
     assert!(
         args.contains(&"-B".to_string()),
         "Regression: Python preset omitted -B flag (bytecode caching suppression)"
@@ -77,4 +121,30 @@ fn regression_mount_rule_immutability() {
     assert_eq!(ro_mount.mount_type, MountType::ReadOnly);
     assert_eq!(ro_mount.host_path, Path::new("/workspace/code"));
     assert!(ro_mount.guest_path.is_none());
+}
+
+#[test]
+fn regression_rust_preset_offline() {
+    // Invariant: Rust/Cargo preset must always enforce --offline for dependency isolation
+    let (_, args) =
+        RuntimePreset::configure(RuntimeKind::Rust, Some("fn main() {}"), None)
+            .expect("Rust configure should succeed");
+
+    assert!(
+        args.contains(&"--offline".to_string()),
+        "Regression: Rust preset omitted --offline flag"
+    );
+}
+
+#[test]
+fn regression_go_preset_offline() {
+    // Invariant: Go preset must always enforce -mod=readonly for dependency isolation
+    let (_, args) =
+        RuntimePreset::configure(RuntimeKind::Go, None, Some(Path::new("main.go")))
+            .expect("Go configure should succeed");
+
+    assert!(
+        args.contains(&"-mod=readonly".to_string()),
+        "Regression: Go preset omitted -mod=readonly flag"
+    );
 }

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeKind {
     Python,
+    #[serde(rename = "python-skill")]
+    PythonSkill,
     Node,
     Bun,
     Deno,
@@ -25,6 +27,7 @@ impl std::str::FromStr for RuntimeKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "python-skill" | "py-skill" | "pyskill" => Ok(RuntimeKind::PythonSkill),
             "python" | "py" | "python3" => Ok(RuntimeKind::Python),
             "node" | "js" | "javascript" => Ok(RuntimeKind::Node),
             "bun" => Ok(RuntimeKind::Bun),
@@ -55,7 +58,8 @@ impl RuntimePreset {
         match kind {
             RuntimeKind::Python => {
                 let exe = Self::find_executable(&["python3", "python"])?;
-                let mut args = vec!["-B".into()]; // No bytecode cache on host, allow loading local workspace modules
+                // Untrusted Model Mode: -I (isolated from host/user env), -S (no site packages), -B (no bytecode)
+                let mut args = vec!["-I".into(), "-S".into(), "-B".into()];
                 if let Some(code) = script_code {
                     args.push("-c".into());
                     args.push(code.into());
@@ -64,6 +68,22 @@ impl RuntimePreset {
                 } else {
                     return Err(CocoonError::Config(
                         "Python runtime requires either inline code (-c) or a script file".into(),
+                    ));
+                }
+                Ok((exe, args))
+            }
+            RuntimeKind::PythonSkill => {
+                let exe = Self::find_executable(&["python3", "python"])?;
+                // Skill Mode: allows loading format/document packages (openpyxl, python-docx, etc.)
+                let mut args = vec!["-B".into()];
+                if let Some(code) = script_code {
+                    args.push("-c".into());
+                    args.push(code.into());
+                } else if let Some(file) = script_file {
+                    args.push(file.to_string_lossy().to_string());
+                } else {
+                    return Err(CocoonError::Config(
+                        "PythonSkill runtime requires either inline code (-c) or a script file".into(),
                     ));
                 }
                 Ok((exe, args))
@@ -85,7 +105,7 @@ impl RuntimePreset {
             }
             RuntimeKind::Bun => {
                 let exe = Self::find_executable(&["bun"])?;
-                let mut args = Vec::new();
+                let mut args = vec!["--no-install".into()];
                 if let Some(code) = script_code {
                     args.push("-e".into());
                     args.push(code.into());
@@ -103,9 +123,11 @@ impl RuntimePreset {
                 let mut args = Vec::new();
                 if let Some(code) = script_code {
                     args.push("eval".into());
+                    args.push("--no-prompt".into());
                     args.push(code.into());
                 } else if let Some(file) = script_file {
                     args.push("run".into());
+                    args.push("--no-prompt".into());
                     args.push(file.to_string_lossy().to_string());
                 } else {
                     return Err(CocoonError::Config(
@@ -152,7 +174,7 @@ impl RuntimePreset {
             }
             RuntimeKind::Rust => {
                 let exe = Self::find_executable(&["cargo"])?;
-                let mut args = vec!["script".into()];
+                let mut args = vec!["script".into(), "--offline".into()];
                 if let Some(file) = script_file {
                     args.push(file.to_string_lossy().to_string());
                 } else if let Some(code) = script_code {
@@ -163,7 +185,7 @@ impl RuntimePreset {
             }
             RuntimeKind::Go => {
                 let exe = Self::find_executable(&["go"])?;
-                let mut args = vec!["run".into()];
+                let mut args = vec!["run".into(), "-mod=readonly".into()];
                 if let Some(file) = script_file {
                     args.push(file.to_string_lossy().to_string());
                 } else {
@@ -175,7 +197,7 @@ impl RuntimePreset {
             }
             RuntimeKind::Ruby => {
                 let exe = Self::find_executable(&["ruby"])?;
-                let mut args = Vec::new();
+                let mut args = vec!["--disable-gems".into()];
                 if let Some(code) = script_code {
                     args.push("-e".into());
                     args.push(code.into());
@@ -190,7 +212,7 @@ impl RuntimePreset {
             }
             RuntimeKind::Php => {
                 let exe = Self::find_executable(&["php"])?;
-                let mut args = Vec::new();
+                let mut args = vec!["-n".into()];
                 if let Some(code) = script_code {
                     args.push("-r".into());
                     args.push(code.into());
@@ -255,11 +277,18 @@ pub fn which(name: &str) -> Option<PathBuf> {
         for dir in paths.split(separator) {
             let p = Path::new(dir).join(name);
             if p.is_file() {
+                #[cfg(windows)]
+                if p.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                    continue; // Skip 0-byte Windows Store execution alias stubs
+                }
                 return Some(p);
             }
             if cfg!(windows) {
                 let p_exe = Path::new(dir).join(format!("{}.exe", name));
                 if p_exe.is_file() {
+                    if p_exe.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                        continue; // Skip 0-byte Windows Store execution alias stubs
+                    }
                     return Some(p_exe);
                 }
             }
@@ -279,6 +308,10 @@ mod tests {
             RuntimeKind::Python
         );
         assert_eq!("py".parse::<RuntimeKind>().unwrap(), RuntimeKind::Python);
+        assert_eq!(
+            "python-skill".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::PythonSkill
+        );
         assert_eq!("node".parse::<RuntimeKind>().unwrap(), RuntimeKind::Node);
         assert_eq!("bun".parse::<RuntimeKind>().unwrap(), RuntimeKind::Bun);
         assert_eq!(
@@ -297,9 +330,22 @@ mod tests {
             RuntimePreset::configure(RuntimeKind::Python, Some("print('unit test')"), None)
                 .expect("Config should succeed");
 
+        assert!(args.contains(&"-I".to_string()));
+        assert!(args.contains(&"-S".to_string()));
         assert!(args.contains(&"-B".to_string()));
         assert!(args.contains(&"-c".to_string()));
         assert!(args.contains(&"print('unit test')".to_string()));
+    }
+
+    #[test]
+    fn test_python_skill_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::PythonSkill, Some("print('skill test')"), None)
+                .expect("Config should succeed");
+
+        assert!(!args.contains(&"-S".to_string()));
+        assert!(args.contains(&"-B".to_string()));
+        assert!(args.contains(&"-c".to_string()));
     }
 
     #[test]
@@ -308,7 +354,48 @@ mod tests {
             RuntimePreset::configure(RuntimeKind::Node, Some("console.log('test')"), None)
                 .expect("Config should succeed");
 
+        assert!(args.contains(&"--no-addons".to_string()));
         assert!(args.contains(&"-e".to_string()));
         assert!(args.contains(&"console.log('test')".to_string()));
+    }
+
+    #[test]
+    fn test_bun_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Bun, Some("console.log('bun test')"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"--no-install".to_string()));
+        assert!(args.contains(&"-e".to_string()));
+    }
+
+    #[test]
+    fn test_deno_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Deno, Some("console.log('deno test')"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"eval".to_string()));
+        assert!(args.contains(&"--no-prompt".to_string()));
+    }
+
+    #[test]
+    fn test_ruby_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Ruby, Some("puts 'ruby test'"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"--disable-gems".to_string()));
+        assert!(args.contains(&"-e".to_string()));
+    }
+
+    #[test]
+    fn test_php_args_configuration() {
+        let (_exe, args) =
+            RuntimePreset::configure(RuntimeKind::Php, Some("echo 'php test';"), None)
+                .expect("Config should succeed");
+
+        assert!(args.contains(&"-n".to_string()));
+        assert!(args.contains(&"-r".to_string()));
     }
 }

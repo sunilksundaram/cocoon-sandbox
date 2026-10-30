@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
     long_about = None
 )]
 struct Cli {
+    /// Emit logs in structured JSON format for machine readability and SIEM ingestion
+    #[arg(long = "log-json", global = true)]
+    log_json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -69,6 +73,18 @@ enum Commands {
         #[arg(long = "mem", value_name = "MB")]
         memory_mb: Option<usize>,
 
+        /// Allow outbound network access (default: false, network blocked)
+        #[arg(long = "allow-network")]
+        allow_network: bool,
+
+        /// Maximum active processes allowed in sandbox (default: 32)
+        #[arg(long = "max-procs", value_name = "COUNT")]
+        max_processes: Option<u32>,
+
+        /// Maximum disk quota in Megabytes allowed for workspace writes (default: 512MB)
+        #[arg(long = "disk", value_name = "MB")]
+        disk_mb: Option<usize>,
+
         /// Format execution summary as JSON (ideal for AI Agents)
         #[arg(long = "json")]
         json: bool,
@@ -109,6 +125,10 @@ enum Commands {
         #[arg(long = "timeout", value_name = "SECS")]
         timeout: Option<u64>,
 
+        /// Allow outbound network access (default: false, network blocked)
+        #[arg(long = "allow-network")]
+        allow_network: bool,
+
         /// Format execution summary as JSON (ideal for AI Agents)
         #[arg(long = "json")]
         json: bool,
@@ -137,14 +157,22 @@ struct PipelineReport {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .init();
-
     let cli = Cli::parse();
+
+    if cli.log_json {
+        tracing_subscriber::fmt()
+            .json()
+            .with_current_span(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+            )
+            .init();
+    }
+
     let driver = get_default_driver();
 
     match cli.command {
@@ -198,6 +226,9 @@ fn main() -> Result<()> {
             copy,
             timeout,
             memory_mb,
+            allow_network,
+            max_processes,
+            disk_mb,
             json,
             raw_cmd,
         } => {
@@ -246,7 +277,10 @@ fn main() -> Result<()> {
                 timeout: Some(effective_timeout),
                 memory_limit_mb: memory_mb,
                 cpu_limit_pct: None,
-                allow_network: true,
+                allow_network,
+                max_processes,
+                max_output_bytes: Some(10 * 1024 * 1024),
+                disk_limit_mb: disk_mb.or(Some(512)),
             };
 
             let config = SandboxConfig {
@@ -275,6 +309,12 @@ fn main() -> Result<()> {
                 if !result.stderr.is_empty() {
                     eprint!("{}", result.stderr);
                 }
+                if result.stdout_truncated {
+                    eprintln!("\n[cocoon] Warning: stdout stream exceeded buffer limit (10MB) and was truncated.");
+                }
+                if result.stderr_truncated {
+                    eprintln!("\n[cocoon] Warning: stderr stream exceeded buffer limit (10MB) and was truncated.");
+                }
                 if result.timed_out {
                     eprintln!("\n[cocoon] Process terminated: execution timed out.");
                 }
@@ -290,6 +330,7 @@ fn main() -> Result<()> {
             copy,
             steps,
             timeout,
+            allow_network,
             json,
         } => {
             if steps.is_empty() {
@@ -359,7 +400,10 @@ fn main() -> Result<()> {
                         timeout: Some(effective_timeout),
                         memory_limit_mb: None,
                         cpu_limit_pct: None,
-                        allow_network: true,
+                        allow_network,
+                        max_processes: Some(32),
+                        max_output_bytes: Some(10 * 1024 * 1024),
+                        disk_limit_mb: Some(512),
                     },
                     stdin_data: None,
                 };

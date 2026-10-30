@@ -1,7 +1,7 @@
 use cocoon_core::CocoonError;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tracing::debug;
+use tracing::{debug, warn};
 
 enum TempDirHolder {
     Ephemeral(TempDir),
@@ -38,6 +38,9 @@ impl Scratchpad {
             std::fs::create_dir_all(p).map_err(CocoonError::Io)?;
             TempDirHolder::Persistent(p.to_path_buf())
         } else {
+            // Sweep stale scratchpads older than 2 hours from previous crashed runs
+            Self::cleanup_stale_scratchpads();
+
             let temp_dir = tempfile::Builder::new()
                 .prefix("cocoon-scratch-")
                 .tempdir()
@@ -58,6 +61,143 @@ impl Scratchpad {
             temp_holder,
             workspace_dir,
         })
+    }
+
+    /// Garbage collection: Purges stale ephemeral scratchpads left by previous crashed runs
+    pub fn cleanup_stale_scratchpads() {
+        let temp = std::env::temp_dir();
+        if let Ok(entries) = std::fs::read_dir(temp) {
+            let threshold = std::time::Duration::from_secs(2 * 3600); // 2 hours
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("cocoon-scratch-") {
+                    let path = entry.path();
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(elapsed) = modified.elapsed() {
+                                if elapsed > threshold {
+                                    let _ = std::fs::remove_dir_all(&path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Verifies that no symlinks or Windows junctions inside the workspace break out to host files
+    pub fn verify_no_breakouts(&self) -> Result<(), CocoonError> {
+        let root = self
+            .workspace_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace_dir.clone());
+        Self::check_breakouts_recursive(&self.workspace_dir, &root)
+    }
+
+    /// Verifies that total disk usage in the scratchpad and workspace does not exceed the quota limit
+    pub fn verify_disk_quota(&self, limit_mb: usize) -> Result<(), CocoonError> {
+        let max_bytes = (limit_mb * 1024 * 1024) as u64;
+        let total_bytes = Self::compute_dir_size(self.root())?;
+        if total_bytes > max_bytes {
+            warn!(
+                target: "cocoon::security",
+                event = "disk_quota_exceeded",
+                consumed_bytes = total_bytes,
+                limit_mb = limit_mb,
+                "Disk quota exceeded in sandbox scratchpad: {:.1} MB > {} MB",
+                total_bytes as f64 / (1024.0 * 1024.0),
+                limit_mb
+            );
+            return Err(CocoonError::SecurityViolation(format!(
+                "Storage quota exceeded: {:.1} MB consumed (limit: {} MB)",
+                total_bytes as f64 / (1024.0 * 1024.0),
+                limit_mb
+            )));
+        }
+        Ok(())
+    }
+
+    fn compute_dir_size(dir: &Path) -> Result<u64, CocoonError> {
+        let mut total = 0;
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                    if meta.is_file() {
+                        total += meta.len();
+                    } else if meta.is_dir() && !meta.file_type().is_symlink() {
+                        total += Self::compute_dir_size(&path)?;
+                    }
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    fn check_breakouts_recursive(dir: &Path, root: &Path) -> Result<(), CocoonError> {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                    if meta.file_type().is_symlink() {
+                        if let Ok(target) = std::fs::read_link(&path) {
+                            let resolved = if target.is_relative() {
+                                path.parent().unwrap_or(root).join(&target)
+                            } else {
+                                target
+                            };
+                            if let Ok(canon) = resolved.canonicalize() {
+                                if !canon.starts_with(root) {
+                                    warn!(
+                                        target: "cocoon::security",
+                                        event = "security_violation",
+                                        violation_type = "symlink_escape",
+                                        source_path = %path.display(),
+                                        target_path = %canon.display(),
+                                        "Detected symlink breakout pointing outside workspace"
+                                    );
+                                    return Err(CocoonError::SecurityViolation(format!(
+                                        "Detected symlink breakout pointing outside workspace: {:?} -> {:?}",
+                                        path, canon
+                                    )));
+                                }
+                            }
+                        }
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::MetadataExt;
+                        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+                            if let Ok(canon) = path.canonicalize() {
+                                if !canon.starts_with(root) {
+                                    warn!(
+                                        target: "cocoon::security",
+                                        event = "security_violation",
+                                        violation_type = "junction_escape",
+                                        source_path = %path.display(),
+                                        target_path = %canon.display(),
+                                        "Detected directory junction breakout pointing outside workspace"
+                                    );
+                                    return Err(CocoonError::SecurityViolation(format!(
+                                        "Detected junction breakout pointing outside workspace: {:?} -> {:?}",
+                                        path, canon
+                                    )));
+                                }
+                            }
+                        }
+                    }
+
+                    if path.is_dir() && !meta.file_type().is_symlink() {
+                        Self::check_breakouts_recursive(&path, root)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Root path of the temporary directory (for TMP/TEMP/caching)

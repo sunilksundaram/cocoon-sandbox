@@ -324,3 +324,250 @@ if response.choices[0].message.tool_calls:
 1. **Host Immutability:** Never worry about `rm -rf` or file corruption — the agent only has write rights in `--work`.
 2. **Infinite Loop Protection:** Default 30s timeout terminates the process tree at the OS level.
 3. **Multi-Turn State:** Pass the same `--work ./session_dir` across conversation turns to maintain state and files between reasoning steps.
+
+---
+
+## 9. Sandbox Defaults & Security Controls: Turning Settings On/Off 🛡️
+
+Cocoon ships with strict **production-grade security defaults** designed to isolate untrusted, model-generated code without container or VM startup latency. Every default can be tuned via CLI flags or programmatic SDK configuration.
+
+### Summary of System Defaults
+
+| Security Setting | Default Value | CLI Flag to Override | Primary Protection |
+| :--- | :--- | :--- | :--- |
+| **Network Access** | `false` (Blocked) | `--allow-network` | Prevents outbound data/credential exfiltration, SSRF to localhost chassis APIs, and Cloud Metadata theft (`169.254.169.254`). |
+| **Execution Timeout** | `30 seconds` | `--timeout <SECS>` | Prevents runaway infinite loops, hanging background tasks, and CPU starvation. |
+| **Active Process Cap** | `32 processes` | `--max-procs <COUNT>` | Prevents fork bombs and OS process table/handle exhaustion via Job Objects / cgroups. |
+| **Disk Write Quota** | `512 MB` | `--disk <MB>` | Prevents disk exhaustion denial-of-service (DoS) from loop write attacks. |
+| **Memory (RAM) Cap** | `Unlimited` (Host RAM) | `--mem <MB>` | Optional hardware RAM limit; terminates process if exceeded. |
+| **Output Buffer Limit** | `10 MB` per stream | *Hard limit* | Prevents host OOM crashes from infinite `stdout`/`stderr` print loops (`stdout_truncated`). |
+| **Filesystem Access** | Current dir is `ReadOnly` | `--ro <PATH>`, `--rw <PATH>` | Host files cannot be modified or deleted. Writes restricted to ephemeral `--work`. |
+| **Environment Profile** | Isolated `dummy_user` | `--inherit-env` | Host credentials in `~/.aws`, `~/.ssh`, `~/.azure`, and Copilot are completely hidden. |
+| **Python Isolation** | `-I -S -B` (stdlib only) | `-r python-skill` | Untrusted code cannot access host site-packages, user site, or install pip packages. |
+| **Compiled Toolchains** | Offline mode enforced | `--allow-network` | Cargo enforces `--offline`; Go enforces `-mod=readonly` and `GOPROXY=off`. |
+| **Breakout Detection** | Active post-run check | *Automatic* | Traverses workspace to detect and block symlinks or NTFS directory junctions escaping to host files. |
+
+---
+
+### Detailed Breakdown: Effects of Toggling Settings
+
+#### 1. Network Access (`--allow-network`)
+* **Default:** `false` (Offline / Blocked)
+* **How it works:**
+  - **Windows:** Proxies are nullified (`127.0.0.1:0`), environment variables for networking are blocked, and AppContainer mode strips all network capabilities at the kernel TCP/IP stack (`WSAEACCES`).
+  - **Linux:** Bubblewrap executes `--unshare-all` without `--share-net`. Network interfaces (including loopback) are completely disconnected.
+* **Turning it ON (`--allow-network`):**
+  - *Functionality gained:* The sandboxed process can make outbound HTTP/HTTPS requests, download dependencies, scrape web pages, and connect to remote APIs.
+  - *Security risks:* Untrusted code can exfiltrate sensitive files, call localhost dev servers/chassis APIs, or reach Cloud Metadata (`http://169.254.169.254/`).
+* **Turning it OFF (Default):**
+  - Zero data exfiltration risk. Sockets fail immediately with permission denied.
+
+```bash
+# Default: Sockets fail immediately
+cocoon run -r python -c "import urllib.request; urllib.request.urlopen('https://example.com')"
+# Error: Connection blocked / refused
+
+# Opt-in network access:
+cocoon run --allow-network -r python -c "import urllib.request; print(urllib.request.urlopen('https://httpbin.org/ip').read().decode())"
+```
+
+---
+
+#### 2. Execution Timeout (`--timeout <SECS>`)
+* **Default:** `30 seconds`
+* **How it works:** Enforced via high-precision monotonic timers. On timeout:
+  - **Windows:** Calls `TerminateJobObject`, atomically killing the entire process tree (all children and grandchildren).
+  - **Linux:** Kills the process and Bubblewrap namespace container.
+  - Telemetry records `timed_out: true` and `termination_reason: "timeout"`.
+* **Increasing / Disabling Timeout:**
+  - *When to increase:* Long-running batch tasks, extensive data transformations, or compilations (e.g. `--timeout 300` for 5 minutes).
+  - *Security risks:* A model hallucinating `while True: pass` will monopolize a CPU core for the entire duration.
+
+```bash
+# Allow a heavy computation up to 2 minutes
+cocoon run --timeout 120 -r node -f heavy_analytics.js
+```
+
+---
+
+#### 3. Active Process Limit (`--max-procs <COUNT>`)
+* **Default:** `32 processes`
+* **How it works:**
+  - **Windows:** Enforced via `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` on the Windows Job Object.
+  - **Linux:** Enforced via `RLIMIT_NPROC` (`setrlimit`).
+* **Turning it Up / Off:**
+  - *When to increase:* Multi-threaded build tools or complex test runners that spawn dozens of worker subprocesses (e.g., `--max-procs 128`).
+  - *Security risks:* Allows fork bombs (e.g., `while True: os.fork()`) to exhaust system PIDs and hang the host OS.
+* **Default behavior:** Any fork or subprocess call beyond 32 immediately fails with `Resource temporarily unavailable`.
+
+```bash
+# Constrain untrusted code strictly to 4 processes
+cocoon run --max-procs 4 -r python -c "import multiprocessing; ..."
+```
+
+---
+
+#### 4. Disk Write Quota (`--disk <MB>`)
+* **Default:** `512 MB`
+* **How it works:**
+  - **Linux:** Enforces `RLIMIT_FSIZE` at the kernel layer. Any file write that exceeds the quota throws `EFBIG` (`File too large`).
+  - **Cross-Platform:** Traverses the ephemeral scratchpad upon execution teardown; fails with `CocoonError::SecurityViolation` if total written size exceeds quota.
+* **Turning it Up:**
+  - *When to increase:* Image/video generation, processing large Parquet/CSV files, or compiling Rust binaries (e.g., `--disk 2048` for 2 GB).
+  - *Security risks:* Scripts writing garbage data in a loop can fill the host hard drive.
+
+```bash
+# Allow up to 2GB of disk writes for artifact generation
+cocoon run --disk 2048 -r python -f generate_video_frames.py
+```
+
+---
+
+#### 5. Memory Allocation Limit (`--mem <MB>`)
+* **Default:** `None` (unlimited, capped by host RAM)
+* **How it works:**
+  - **Windows:** Enforced via `JOB_OBJECT_LIMIT_JOB_MEMORY`. If committed memory crosses the boundary, the Windows kernel aborts the process and flags `oom_killed: true`.
+  - **Linux:** Enforced via `RLIMIT_AS` (`libc::setrlimit`).
+* **Turning it ON (Setting `--mem <MB>`):**
+  - *Functionality:* Guarantees that an agent script with a memory leak or memory bomb (`"A" * 10**10`) cannot crash other host services or starve the agent chassis.
+
+```bash
+# Cap memory strictly at 256 MB
+cocoon run --mem 256 -r node -e "let a = []; while(true) a.push(new Array(1e6))"
+# Automatically terminated when 256MB is reached
+```
+
+---
+
+#### 6. Hermetic Language Runtime Hardening
+To prevent untrusted scripts from tapping into pre-installed tools, global plugins, or host startup scripts, Cocoon applies hermetic flags and environment sanitization across every supported language preset:
+
+* **Python (`python` vs. `python-skill`):**
+  - **`python` (Default):** Isolated Mode (`python -I -S -B`). Disables host `PYTHONPATH`/`PYTHONHOME` (`-I`), denies third-party `site-packages` (`-S`), and disables bytecode writes (`-B`).
+  - **`python-skill`:** Invokes `python -B` without `-S`, allowing access to trusted system format packages (e.g. `openpyxl`, `python-docx`, `pandas`).
+* **Node.js (`node`):**
+  - Invokes `node --no-addons` to prevent loading arbitrary compiled C++ native binary add-ons (`.node`).
+  - Automatically clears `NODE_OPTIONS` from the environment to prevent runtime flag injection attacks.
+* **Ruby (`ruby`):**
+  - Invokes `ruby --disable-gems` (Ruby's direct equivalent of Python's `-S`). Disables RubyGems initialization, restricting scripts strictly to the standard library.
+  - Clears `RUBYOPT` from the environment.
+* **PHP (`php`):**
+  - Invokes `php -n` (No configuration file). Ignores any host `php.ini` files to block `auto_prepend_file` or dangerous extension preloads.
+* **Deno (`deno`):**
+  - Passes `--no-prompt` on both `deno eval` and `deno run` to prevent the child process from hanging indefinitely on interactive permission requests.
+* **Bun (`bun`):**
+  - Passes `--no-install` to ensure Bun never attempts to auto-download missing packages from npm during script execution.
+* **PowerShell (`pwsh`):**
+  - Invokes `-NoProfile -NonInteractive -ExecutionPolicy Bypass` to prevent executing host `profile.ps1` startup scripts.
+* **Bash (`bash`):**
+  - Invokes `--noprofile --norc` to prevent loading `.bashrc` or `.bash_profile`.
+* **Rust & Go:**
+  - Rust invokes `cargo script --offline` and injects `CARGO_NET_OFFLINE=true`.
+  - Go invokes `go run -mod=readonly` and injects `GOPROXY=off`, `GONOSUMDB=*`.
+
+| Runtime | Hermetic Hardening Flags | Environment Cleared / Injected |
+| :--- | :--- | :--- |
+| **Python** | `-I -S -B` | `PYTHONNOUSERSITE=1`, `PIP_NO_INDEX=1`, `PYTHONUSERBASE=empty` |
+| **Python Skill** | `-B` | `PIP_NO_INDEX=1`, `PYTHONUSERBASE=empty` |
+| **Node.js** | `--no-addons` | `NODE_OPTIONS=""`, `npm_config_offline=true` |
+| **Ruby** | `--disable-gems` | `RUBYOPT=""` |
+| **PHP** | `-n` | Host `php.ini` bypassed |
+| **Deno** | `--no-prompt` | Terminal prompts disabled |
+| **Bun** | `--no-install` | Auto-install disabled |
+| **PowerShell** | `-NoProfile -NonInteractive` | Host profiles ignored |
+| **Bash** | `--noprofile --norc` | Host rc files ignored |
+| **Rust** | `cargo script --offline` | `CARGO_NET_OFFLINE=true` |
+| **Go** | `go run -mod=readonly` | `GOPROXY=off`, `GONOSUMDB=*` |
+
+```bash
+# 1. Untrusted Python: Runs safely with stdlib only
+cocoon run -r python -c "import math; print(math.sqrt(16))"
+
+# 2. Document skill: Runs with openpyxl/docx support
+cocoon run -r python-skill -c "import openpyxl; print('Excel engine ready')"
+
+# 3. Hermetic Node.js: Addons disabled and env options neutralized
+cocoon run -r node -c "console.log('Hermetic JS Execution')"
+```
+
+---
+
+#### 7. Filesystem Boundaries: Read-Only vs. Read-Write Mounts
+* **Default:** Current directory (`.`) is mounted as `ReadOnly` (`--ro`).
+* **Jail Execution:** All file creations, edits, and temp caches take place inside an ephemeral workspace folder, destroyed on exit.
+* **Mount Controls:**
+  - `--ro <PATH>`: Mount a specific host directory as strictly Read-Only.
+  - `--rw <PATH>`: Grant explicit Read-Write access to a designated folder.
+  - `--copy <PATH>`: Copy-on-Write staging: copies files into the scratchpad so scripts can modify them without touching the originals.
+
+```bash
+# Safe testing: inspect repository code without risk of accidental file modification
+cocoon run --ro ./src --work ./scratch -r python -c "
+import os
+for root, dirs, files in os.walk('.'):
+    print(files)
+"
+```
+
+---
+
+#### 8. Structured SIEM Logging (`--log-json`)
+* **Default:** Human-readable warnings and status output on `stderr`.
+* **Turning it ON (`--log-json`):**
+  - Formats all internal events (startup, security warnings, breakout alerts, teardown) as single-line JSON records formatted for Datadog, Splunk, CloudWatch, or Google Cloud Operations.
+
+```bash
+cocoon --log-json run -r node -c "console.log('App started')"
+```
+Sample log output:
+```json
+{"timestamp":"2026-10-30T16:22:15.102Z","level":"INFO","target":"cocoon::runtime","fields":{"message":"Spawning sandboxed process","executable":"node"}}
+{"timestamp":"2026-10-30T16:22:15.115Z","level":"WARN","target":"cocoon::security","fields":{"event":"security_violation","violation_type":"junction_escape","message":"Detected directory junction breakout pointing outside workspace"}}
+```
+
+---
+
+### Common Recipe Profiles
+
+#### Recipe A: Untrusted AI Agent Code (Maximum Lockdown)
+*Use when executing arbitrary code generated by an LLM.*
+```bash
+# Maximum security: No network, 15s timeout, 128MB RAM, 100MB disk, stdlib only
+cocoon run \
+  --timeout 15 \
+  --mem 128 \
+  --disk 100 \
+  --max-procs 8 \
+  -r python \
+  -c "print('Running untrusted code safely')" \
+  --json
+```
+
+#### Recipe B: Data Analysis & Document Generation
+*Use when an agent needs to process data or build Excel/Word reports.*
+```bash
+# Enabled libraries, isolated disk, 60s timeout, offline
+cocoon run \
+  --work ./output_reports \
+  --timeout 60 \
+  --disk 500 \
+  -r python-skill \
+  -f generate_monthly_report.py
+```
+
+#### Recipe C: Web Scraping & API Integration Agent
+*Use when an agent is explicitly tasked with fetching external information.*
+```bash
+# Network enabled, 256MB RAM, current directory read-only
+cocoon run \
+  --allow-network \
+  --timeout 45 \
+  --mem 256 \
+  -r node \
+  -c "
+    const https = require('https');
+    https.get('https://api.github.com/zen', { headers: { 'User-Agent': 'Cocoon' } }, res => {
+      res.pipe(process.stdout);
+    });
+  "
+```

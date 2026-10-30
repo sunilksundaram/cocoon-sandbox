@@ -40,6 +40,17 @@ impl MountRule {
     }
 }
 
+/// Reason for process termination (if abnormally terminated)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminationReason {
+    Timeout,
+    MemoryExceeded,
+    ProcessCountExceeded,
+    SecurityViolation,
+    KilledBySupervisor,
+}
+
 /// Resource constraints imposed on the guest process
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
@@ -49,8 +60,14 @@ pub struct ResourceLimits {
     pub memory_limit_mb: Option<usize>,
     /// CPU limit percentage (1..=100)
     pub cpu_limit_pct: Option<u32>,
-    /// Whether outbound network access is allowed
+    /// Whether outbound network access is allowed (defaults to false for security)
     pub allow_network: bool,
+    /// Maximum active processes allowed in the sandbox (defaults to 32)
+    pub max_processes: Option<u32>,
+    /// Maximum stdout/stderr output bytes captured before truncation (defaults to 10MB)
+    pub max_output_bytes: Option<usize>,
+    /// Maximum disk space (in MB) allowed for files created in scratchpad/workspace (defaults to 512MB)
+    pub disk_limit_mb: Option<usize>,
 }
 
 impl Default for ResourceLimits {
@@ -59,7 +76,10 @@ impl Default for ResourceLimits {
             timeout: Some(Duration::from_secs(30)),
             memory_limit_mb: None,
             cpu_limit_pct: None,
-            allow_network: true,
+            allow_network: false,
+            max_processes: Some(32),
+            max_output_bytes: Some(10 * 1024 * 1024),
+            disk_limit_mb: Some(512),
         }
     }
 }
@@ -121,6 +141,18 @@ pub struct ExecutionResult {
     pub timed_out: bool,
     /// True if process was killed due to exceeding memory limit
     pub oom_killed: bool,
+    /// Detailed reason if process was terminated abnormally
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub termination_reason: Option<TerminationReason>,
+    /// True if stdout stream exceeded buffer limit and was truncated
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    /// True if stderr stream exceeded buffer limit and was truncated
+    #[serde(default)]
+    pub stderr_truncated: bool,
+    /// Peak memory consumed in megabytes (if telemetry supported)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_mb: Option<usize>,
 }
 
 impl ExecutionResult {
@@ -138,7 +170,9 @@ mod tests {
         let limits = ResourceLimits::default();
         assert_eq!(limits.timeout, Some(Duration::from_secs(30)));
         assert_eq!(limits.memory_limit_mb, None);
-        assert!(limits.allow_network);
+        assert!(!limits.allow_network); // Default-deny network
+        assert_eq!(limits.max_processes, Some(32));
+        assert_eq!(limits.disk_limit_mb, Some(512));
     }
 
     #[test]
@@ -161,6 +195,10 @@ mod tests {
             duration_ms: 10.0,
             timed_out: false,
             oom_killed: false,
+            termination_reason: None,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            peak_memory_mb: None,
         };
         assert!(ok.success());
 

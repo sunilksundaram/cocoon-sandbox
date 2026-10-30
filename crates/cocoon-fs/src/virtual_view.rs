@@ -110,32 +110,51 @@ impl VirtualView {
                         .arg("*S-1-1-0:(OI)(CI)(DE,DC,WD,AD)")
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
-                        .status();
+                        .status()
+                        .map_err(CocoonError::Io)?;
 
-                    if let Ok(s) = status {
-                        if s.success() {
-                            locked.push(mount.host_path.clone());
-                        }
+                    if !status.success() {
+                        return Err(CocoonError::SecurityViolation(format!(
+                            "Failed to lock read-only mount: {:?}",
+                            mount.host_path
+                        )));
                     }
+                    locked.push(mount.host_path.clone());
                 }
             }
 
-            // Ensure the designated workspace folder always maintains write permissions
-            // even if it resides inside a read-only parent directory
+            // Ensure the designated workspace folder maintains write permissions
             let ws = self.scratchpad.workspace();
-            let _ = std::process::Command::new("icacls")
+            let status_inh = std::process::Command::new("icacls")
                 .arg(ws)
                 .arg("/inheritance:r")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status();
-            let _ = std::process::Command::new("icacls")
+                .status()
+                .map_err(CocoonError::Io)?;
+
+            if !status_inh.success() {
+                return Err(CocoonError::SecurityViolation(format!(
+                    "Failed to reset inheritance on workspace: {:?}",
+                    ws
+                )));
+            }
+
+            let status_grant = std::process::Command::new("icacls")
                 .arg(ws)
                 .arg("/grant")
                 .arg("*S-1-1-0:(OI)(CI)F")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status();
+                .status()
+                .map_err(CocoonError::Io)?;
+
+            if !status_grant.success() {
+                return Err(CocoonError::SecurityViolation(format!(
+                    "Failed to grant permissions on workspace: {:?}",
+                    ws
+                )));
+            }
 
             Ok(ReadOnlyGuard {
                 locked_directories: locked,
@@ -243,10 +262,53 @@ impl VirtualView {
             pip_cache.to_string_lossy().to_string(),
         );
 
-        // Redirect Python user install directory to workspace so pip install --user installs into the sandbox
+        // Security: Synthesize an isolated sandbox user profile inside the scratchpad
+        // Prevents child processes from discovering and reading host credentials in ~/.aws, ~/.ssh, etc.
+        let dummy_user = self.scratchpad.root().join("dummy_user");
+        let _ = std::fs::create_dir_all(&dummy_user);
+        let dummy_appdata = dummy_user.join("AppData");
+        let dummy_roaming = dummy_appdata.join("Roaming");
+        let dummy_local = dummy_appdata.join("Local");
+        let _ = std::fs::create_dir_all(&dummy_roaming);
+        let _ = std::fs::create_dir_all(&dummy_local);
+
+        let dummy_user_str = dummy_user.to_string_lossy().to_string();
+        envs.insert("USERPROFILE".into(), dummy_user_str.clone());
+        envs.insert("HOME".into(), dummy_user_str.clone());
+        envs.insert(
+            "HOMEDRIVE".into(),
+            dummy_user
+                .components()
+                .next()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .unwrap_or_else(|| "C:".into()),
+        );
+        envs.insert("HOMEPATH".into(), dummy_user_str.clone());
+        envs.insert("APPDATA".into(), dummy_roaming.to_string_lossy().to_string());
+        envs.insert(
+            "LOCALAPPDATA".into(),
+            dummy_local.to_string_lossy().to_string(),
+        );
+
+        // Security: Disable user site packages and pip user installations inside sandbox
+        envs.insert("PYTHONNOUSERSITE".into(), "1".into());
+        envs.insert("PIP_NO_INDEX".into(), "1".into());
+
+        // Neutralize host interpreter options that allow arbitrary code or hook injection
+        envs.insert("NODE_OPTIONS".into(), "".into());
+        envs.insert("RUBYOPT".into(), "".into());
+        envs.insert("PERL5OPT".into(), "".into());
+
+        // Offline toolchain configuration (enforces offline dependency resolution)
+        envs.insert("CARGO_NET_OFFLINE".into(), "true".into());
+        envs.insert("GOPROXY".into(), "off".into());
+        envs.insert("GONOSUMDB".into(), "*".into());
+        envs.insert("npm_config_offline".into(), "true".into());
+        let empty_userbase = self.scratchpad.root().join("empty_userbase");
+        let _ = std::fs::create_dir_all(&empty_userbase);
         envs.insert(
             "PYTHONUSERBASE".into(),
-            self.scratchpad.workspace().to_string_lossy().to_string(),
+            empty_userbase.to_string_lossy().to_string(),
         );
 
         // Add workspace/Modules to PowerShell module search path

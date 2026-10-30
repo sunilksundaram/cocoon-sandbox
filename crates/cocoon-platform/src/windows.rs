@@ -1,4 +1,6 @@
-use cocoon_core::{CocoonError, ExecutionResult, ResourceLimits, SandboxConfig, SandboxDriver};
+use cocoon_core::{
+    CocoonError, ExecutionResult, ResourceLimits, SandboxConfig, SandboxDriver, TerminationReason,
+};
 use cocoon_fs::VirtualView;
 use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
@@ -6,14 +8,22 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Security::FreeSid;
+use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeleteAppContainerProfile,
+};
+
+type PSID = *mut std::ffi::c_void;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectCpuRateControlInformation,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+    JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
+    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
 #[derive(Default)]
@@ -24,7 +34,7 @@ impl WindowsJobObjectDriver {
         Self
     }
 
-    /// Configures a Windows Job Object with memory caps and process isolation
+    /// Configures a Windows Job Object with memory, process caps, and CPU rate limits
     fn setup_job_object(&self, limits: &ResourceLimits) -> Result<HANDLE, CocoonError> {
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -43,6 +53,12 @@ impl WindowsJobObjectDriver {
                 info.JobMemoryLimit = mem_mb * 1024 * 1024;
             }
 
+            // Enforce active process limit (mitigates fork bombs and handle exhaustion)
+            if let Some(max_procs) = limits.max_processes {
+                limit_flags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+                info.BasicLimitInformation.ActiveProcessLimit = max_procs;
+            }
+
             info.BasicLimitInformation.LimitFlags = limit_flags;
 
             let res = SetInformationJobObject(
@@ -57,6 +73,28 @@ impl WindowsJobObjectDriver {
                 return Err(CocoonError::Platform(
                     "Failed to apply Windows Job Object limits".into(),
                 ));
+            }
+
+            // Enforce CPU rate limiting if specified
+            if let Some(cpu_pct) = limits.cpu_limit_pct {
+                let mut cpu_info: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = std::mem::zeroed();
+                cpu_info.ControlFlags =
+                    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+                cpu_info.Anonymous.CpuRate = (cpu_pct.clamp(1, 100)) * 100;
+
+                let res_cpu = SetInformationJobObject(
+                    job,
+                    JobObjectCpuRateControlInformation,
+                    &cpu_info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                );
+
+                if res_cpu == 0 {
+                    CloseHandle(job);
+                    return Err(CocoonError::Platform(
+                        "Failed to apply Windows Job Object CPU rate limits".into(),
+                    ));
+                }
             }
 
             Ok(job)
@@ -120,7 +158,7 @@ impl SandboxDriver for WindowsJobObjectDriver {
         // Apply environment variables
         if !config.inherit_env {
             cmd.env_clear();
-            // Retain minimal critical Windows environment variables
+            // Retain minimal critical Windows environment variables (USERPROFILE/APPDATA omitted for credential security)
             for var in &[
                 "SystemRoot",
                 "SystemDrive",
@@ -128,11 +166,6 @@ impl SandboxDriver for WindowsJobObjectDriver {
                 "PATH",
                 "PATHEXT",
                 "COMSPEC",
-                "USERPROFILE",
-                "LOCALAPPDATA",
-                "APPDATA",
-                "HOMEDRIVE",
-                "HOMEPATH",
                 "GOROOT",
                 "GOPATH",
                 "JAVA_HOME",
@@ -145,6 +178,14 @@ impl SandboxDriver for WindowsJobObjectDriver {
                     cmd.env(var, val);
                 }
             }
+        }
+
+        // Enforce network isolation in environment if disabled
+        if !config.limits.allow_network {
+            cmd.env("HTTP_PROXY", "http://127.0.0.1:0");
+            cmd.env("HTTPS_PROXY", "http://127.0.0.1:0");
+            cmd.env("ALL_PROXY", "socks5://127.0.0.1:0");
+            cmd.env("no_proxy", "");
         }
 
         // Apply VFS cache redirects (prevents modifying read-only folders for bytecode, temp, etc.)
@@ -194,7 +235,8 @@ impl SandboxDriver for WindowsJobObjectDriver {
             }
         }
 
-        // Setup concurrent stdout & stderr readers
+        // Setup concurrent stdout & stderr readers with buffer caps (prevents memory DoS)
+        let max_output = config.limits.max_output_bytes.unwrap_or(10 * 1024 * 1024);
         let mut stdout_handle = child.stdout.take();
         let mut stderr_handle = child.stderr.take();
 
@@ -204,26 +246,63 @@ impl SandboxDriver for WindowsJobObjectDriver {
         if let Some(mut out) = stdout_handle.take() {
             thread::spawn(move || {
                 let mut buf = Vec::new();
-                let _ = out.read_to_end(&mut buf);
-                let _ = stdout_tx.send(buf);
+                let mut chunk = [0u8; 8192];
+                let mut truncated = false;
+                loop {
+                    match out.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if buf.len() + n <= max_output {
+                                buf.extend_from_slice(&chunk[..n]);
+                            } else {
+                                let rem = max_output.saturating_sub(buf.len());
+                                if rem > 0 {
+                                    buf.extend_from_slice(&chunk[..rem]);
+                                }
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = stdout_tx.send((buf, truncated));
             });
         } else {
-            let _ = stdout_tx.send(Vec::new());
+            let _ = stdout_tx.send((Vec::new(), false));
         }
 
         if let Some(mut err) = stderr_handle.take() {
             thread::spawn(move || {
                 let mut buf = Vec::new();
-                let _ = err.read_to_end(&mut buf);
-                let _ = stderr_tx.send(buf);
+                let mut chunk = [0u8; 8192];
+                let mut truncated = false;
+                loop {
+                    match err.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if buf.len() + n <= max_output {
+                                buf.extend_from_slice(&chunk[..n]);
+                            } else {
+                                let rem = max_output.saturating_sub(buf.len());
+                                if rem > 0 {
+                                    buf.extend_from_slice(&chunk[..rem]);
+                                }
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = stderr_tx.send((buf, truncated));
             });
         } else {
-            let _ = stderr_tx.send(Vec::new());
+            let _ = stderr_tx.send((Vec::new(), false));
         }
 
-        // Wait with timeout
+        // Wait with timeout and atomic job tree termination
         let timeout = config.limits.timeout;
         let mut timed_out = false;
+        let mut termination_reason = None;
         let mut exit_code = -1;
 
         if let Some(duration) = timeout {
@@ -239,14 +318,27 @@ impl SandboxDriver for WindowsJobObjectDriver {
                     Ok(None) => {
                         if Instant::now() >= deadline {
                             timed_out = true;
-                            let _ = child.kill();
+                            termination_reason = Some(TerminationReason::Timeout);
+                            warn!(
+                                target: "cocoon::security",
+                                event = "execution_timeout",
+                                executable = %config.executable.display(),
+                                timeout_ms = duration.as_millis(),
+                                "Process exceeded execution timeout limit; terminating entire job object tree"
+                            );
+                            unsafe {
+                                // Atomically terminate all processes in the job object tree
+                                TerminateJobObject(job_handle, 1);
+                            }
                             let _ = child.wait();
                             break;
                         }
                         thread::sleep(poll_interval);
                     }
                     Err(e) => {
-                        let _ = child.kill();
+                        unsafe {
+                            TerminateJobObject(job_handle, 1);
+                        }
                         return Err(CocoonError::Io(e));
                     }
                 }
@@ -258,9 +350,17 @@ impl SandboxDriver for WindowsJobObjectDriver {
             }
         }
 
-        let stdout_bytes = stdout_rx.recv().unwrap_or_default();
-        let stderr_bytes = stderr_rx.recv().unwrap_or_default();
+        let (stdout_bytes, stdout_truncated) = stdout_rx.recv().unwrap_or_default();
+        let (stderr_bytes, stderr_truncated) = stderr_rx.recv().unwrap_or_default();
         let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+
+        // Security check: verify no junctions or symlinks inside workspace escape to host files
+        vfs.scratchpad.verify_no_breakouts()?;
+
+        // Security check: enforce disk write quota if configured
+        if let Some(disk_mb) = config.limits.disk_limit_mb {
+            vfs.scratchpad.verify_disk_quota(disk_mb)?;
+        }
 
         Ok(ExecutionResult {
             exit_code,
@@ -269,6 +369,57 @@ impl SandboxDriver for WindowsJobObjectDriver {
             duration_ms,
             timed_out,
             oom_killed: false,
+            termination_reason,
+            stdout_truncated,
+            stderr_truncated,
+            peak_memory_mb: None,
         })
+    }
+}
+
+/// RAII Guard managing Windows AppContainer profile creation, SID lifecycle, and cleanup
+pub struct AppContainerProfile {
+    pub name: Vec<u16>,
+    pub sid: PSID,
+}
+
+impl AppContainerProfile {
+    /// Creates an ephemeral AppContainer with 0 capabilities (blocks all network access at kernel level)
+    pub fn create(profile_name: &str) -> Result<Self, CocoonError> {
+        let name_wide: Vec<u16> = profile_name.encode_utf16().chain(Some(0)).collect();
+        let mut sid: PSID = std::ptr::null_mut();
+
+        unsafe {
+            let hr = CreateAppContainerProfile(
+                name_wide.as_ptr(),
+                name_wide.as_ptr(),
+                name_wide.as_ptr(),
+                std::ptr::null(), // 0 capabilities = Zero Network
+                0,
+                &mut sid,
+            );
+            // S_OK is 0
+            if hr < 0 {
+                return Err(CocoonError::Platform(format!(
+                    "Failed to create AppContainer profile (HRESULT: 0x{:08X})",
+                    hr
+                )));
+            }
+        }
+        Ok(Self {
+            name: name_wide,
+            sid,
+        })
+    }
+}
+
+impl Drop for AppContainerProfile {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.sid.is_null() {
+                FreeSid(self.sid);
+            }
+            DeleteAppContainerProfile(self.name.as_ptr());
+        }
     }
 }
