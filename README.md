@@ -1,5 +1,13 @@
 # Cocoon 🛡️
 
+[![CI](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml/badge.svg)](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/cocoon-sandbox.svg?color=orange&logo=rust)](https://crates.io/crates/cocoon-sandbox)
+[![PyPI](https://img.shields.io/pypi/v/cocoon-sandbox.svg?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/cocoon-sandbox/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/cocoon-sandbox.svg?logo=python&logoColor=white)](https://pypi.org/project/cocoon-sandbox/)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](#-license)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blueviolet.svg)](#%EF%B8%8F-architecture--isolation-model)
+[![Security Audit](https://img.shields.io/badge/security%20audit-RustSec%20passed-brightgreen.svg)](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml)
+
 > A featherweight, cross-platform sandbox with virtual and read-only filesystems designed for AI agents and secure code execution.
 
 Cocoon allows AI agents, code evaluation suites, and developers to safely run untrusted scripts in **Python, Node.js, Bun, Deno, Go, Java, Rust, PowerShell, Bash, Ruby, PHP, Lua, and any binary compiler** without the latency or complexity of heavyweight containers or virtual machines.
@@ -165,4 +173,9 @@ cocoon pipeline \
 ---
 
 ## 📄 License
-MIT OR Apache-2.0
+
+Dual-licensed under either:
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+* MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
