@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/cocoon-sandbox.svg?color=orange&logo=rust)](https://crates.io/crates/cocoon-sandbox)
 [![PyPI](https://img.shields.io/pypi/v/cocoon-sandbox.svg?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/cocoon-sandbox/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/cocoon-sandbox.svg?logo=python&logoColor=white)](https://pypi.org/project/cocoon-sandbox/)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](#-license)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blueviolet.svg)](#%EF%B8%8F-architecture--isolation-model)
 [![Security Audit](https://img.shields.io/badge/security%20audit-RustSec%20passed-brightgreen.svg)](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml)
 
@@ -174,8 +174,4 @@ cocoon pipeline \
 
 ## 📄 License
 
-Dual-licensed under either:
-* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-* MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+This project is licensed under the [MIT License](LICENSE).

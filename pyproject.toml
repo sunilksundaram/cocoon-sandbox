@@ -10,7 +10,7 @@ readme = "README.md"
 authors = [
     { name = "Sunil K Sundaram" }
 ]
-license = { text = "MIT OR Apache-2.0" }
+license = { text = "MIT" }
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

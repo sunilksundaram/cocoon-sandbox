@@ -11,8 +11,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Cocoon Team"]
-license = "MIT OR Apache-2.0"
+authors = ["Sunil K Sundaram"]
+license = "MIT"
 description = "A lightweight cross-platform sandbox with virtual and read-only filesystems for AI agents and code execution"
 repository = "https://github.com/sunilksundaram/cocoon"
 
