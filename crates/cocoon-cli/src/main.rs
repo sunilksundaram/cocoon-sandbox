@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use cocoon_core::{MountRule, MountType, ResourceLimits, SandboxConfig};
+use cocoon_core::{MountRule, MountType, ResourceLimits, SandboxConfig, TerminationReason};
 use cocoon_fs::VirtualView;
 use cocoon_platform::get_default_driver;
 use cocoon_runtimes::{which, RuntimeKind, RuntimePreset};
@@ -129,6 +129,18 @@ enum Commands {
         #[arg(long = "allow-network")]
         allow_network: bool,
 
+        /// Maximum memory in Megabytes allowed for sandbox execution
+        #[arg(short = 'm', long = "mem", value_name = "MB")]
+        memory_mb: Option<usize>,
+
+        /// Maximum active processes allowed in sandbox (default: 32)
+        #[arg(long = "max-procs", value_name = "COUNT")]
+        max_processes: Option<u32>,
+
+        /// Maximum disk quota in Megabytes allowed for workspace writes (default: 512MB)
+        #[arg(long = "disk", value_name = "MB")]
+        disk_mb: Option<usize>,
+
         /// Format execution summary as JSON (ideal for AI Agents)
         #[arg(long = "json")]
         json: bool,
@@ -147,6 +159,11 @@ struct PipelineStepReport {
     stderr: String,
     duration_ms: f64,
     timed_out: bool,
+    oom_killed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    termination_reason: Option<TerminationReason>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -278,7 +295,7 @@ fn main() -> Result<()> {
                 memory_limit_mb: memory_mb,
                 cpu_limit_pct: None,
                 allow_network,
-                max_processes,
+                max_processes: max_processes.or(Some(32)),
                 max_output_bytes: Some(10 * 1024 * 1024),
                 disk_limit_mb: disk_mb.or(Some(512)),
             };
@@ -331,6 +348,9 @@ fn main() -> Result<()> {
             steps,
             timeout,
             allow_network,
+            memory_mb,
+            max_processes,
+            disk_mb,
             json,
         } => {
             if steps.is_empty() {
@@ -398,12 +418,12 @@ fn main() -> Result<()> {
                     mounts: Vec::new(), // Already protected by _ro_guard
                     limits: ResourceLimits {
                         timeout: Some(effective_timeout),
-                        memory_limit_mb: None,
+                        memory_limit_mb: memory_mb,
                         cpu_limit_pct: None,
                         allow_network,
-                        max_processes: Some(32),
+                        max_processes: max_processes.or(Some(32)),
                         max_output_bytes: Some(10 * 1024 * 1024),
-                        disk_limit_mb: Some(512),
+                        disk_limit_mb: disk_mb.or(Some(512)),
                     },
                     stdin_data: None,
                 };
@@ -432,6 +452,10 @@ fn main() -> Result<()> {
                     stderr: result.stderr,
                     duration_ms: result.duration_ms,
                     timed_out: result.timed_out,
+                    oom_killed: result.oom_killed,
+                    termination_reason: result.termination_reason,
+                    stdout_truncated: result.stdout_truncated,
+                    stderr_truncated: result.stderr_truncated,
                 });
 
                 if !step_success {

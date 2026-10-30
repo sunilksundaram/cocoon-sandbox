@@ -163,27 +163,70 @@ impl SandboxDriver for LinuxNamespaceDriver {
         let mut stdout_handle = child.stdout.take();
         let mut stderr_handle = child.stderr.take();
 
+        let max_output = config.limits.max_output_bytes.unwrap_or(10 * 1024 * 1024);
         let (stdout_tx, stdout_rx) = mpsc::channel();
         let (stderr_tx, stderr_rx) = mpsc::channel();
 
         if let Some(mut out) = stdout_handle.take() {
             thread::spawn(move || {
                 let mut buf = Vec::new();
-                let _ = out.read_to_end(&mut buf);
-                let _ = stdout_tx.send(buf);
+                let mut chunk = [0u8; 8192];
+                let mut truncated = false;
+                loop {
+                    match out.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if buf.len() + n <= max_output {
+                                buf.extend_from_slice(&chunk[..n]);
+                            } else {
+                                let rem = max_output.saturating_sub(buf.len());
+                                if rem > 0 {
+                                    buf.extend_from_slice(&chunk[..rem]);
+                                }
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = stdout_tx.send((buf, truncated));
             });
+        } else {
+            let _ = stdout_tx.send((Vec::new(), false));
         }
 
         if let Some(mut err) = stderr_handle.take() {
             thread::spawn(move || {
                 let mut buf = Vec::new();
-                let _ = err.read_to_end(&mut buf);
-                let _ = stderr_tx.send(buf);
+                let mut chunk = [0u8; 8192];
+                let mut truncated = false;
+                loop {
+                    match err.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if buf.len() + n <= max_output {
+                                buf.extend_from_slice(&chunk[..n]);
+                            } else {
+                                let rem = max_output.saturating_sub(buf.len());
+                                if rem > 0 {
+                                    buf.extend_from_slice(&chunk[..rem]);
+                                }
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = stderr_tx.send((buf, truncated));
             });
+        } else {
+            let _ = stderr_tx.send((Vec::new(), false));
         }
 
         let timeout = config.limits.timeout;
         let mut timed_out = false;
+        #[allow(unused_mut)]
+        let mut oom_killed = false;
         let mut termination_reason = None;
         let mut exit_code = -1;
 
@@ -195,6 +238,16 @@ impl SandboxDriver for LinuxNamespaceDriver {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         exit_code = status.code().unwrap_or(-1);
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::process::ExitStatusExt;
+                            if status.signal() == Some(9) || exit_code == 137 {
+                                if config.limits.memory_limit_mb.is_some() {
+                                    oom_killed = true;
+                                    termination_reason = Some(TerminationReason::MemoryExceeded);
+                                }
+                            }
+                        }
                         break;
                     }
                     Ok(None) => {
@@ -222,13 +275,25 @@ impl SandboxDriver for LinuxNamespaceDriver {
             }
         } else {
             match child.wait() {
-                Ok(status) => exit_code = status.code().unwrap_or(-1),
+                Ok(status) => {
+                    exit_code = status.code().unwrap_or(-1);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if status.signal() == Some(9) || exit_code == 137 {
+                            if config.limits.memory_limit_mb.is_some() {
+                                oom_killed = true;
+                                termination_reason = Some(TerminationReason::MemoryExceeded);
+                            }
+                        }
+                    }
+                }
                 Err(e) => return Err(CocoonError::Io(e)),
             }
         }
 
-        let stdout_bytes = stdout_rx.recv().unwrap_or_default();
-        let stderr_bytes = stderr_rx.recv().unwrap_or_default();
+        let (stdout_bytes, stdout_truncated) = stdout_rx.recv().unwrap_or_default();
+        let (stderr_bytes, stderr_truncated) = stderr_rx.recv().unwrap_or_default();
         let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
         // Security check: verify no junctions or symlinks inside workspace escape to host files
@@ -245,10 +310,10 @@ impl SandboxDriver for LinuxNamespaceDriver {
             stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
             duration_ms,
             timed_out,
-            oom_killed: false,
+            oom_killed,
             termination_reason,
-            stdout_truncated: false,
-            stderr_truncated: false,
+            stdout_truncated,
+            stderr_truncated,
             peak_memory_mb: None,
         })
     }

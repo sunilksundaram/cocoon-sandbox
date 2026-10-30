@@ -19,11 +19,12 @@ use windows_sys::Win32::Security::Isolation::{
 type PSID = *mut std::ffi::c_void;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectCpuRateControlInformation,
-    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
-    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE, JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
-    JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
-    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
+    JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+    JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
 #[derive(Default)]
@@ -354,6 +355,33 @@ impl SandboxDriver for WindowsJobObjectDriver {
         let (stderr_bytes, stderr_truncated) = stderr_rx.recv().unwrap_or_default();
         let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
+        // Query Job Object telemetry (PeakJobMemoryUsed, etc.) before handle closure
+        let mut peak_memory_mb = None;
+        let mut oom_killed = false;
+        unsafe {
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            let mut return_len = 0u32;
+            let query_res = QueryInformationJobObject(
+                job_handle,
+                JobObjectExtendedLimitInformation,
+                &mut info as *mut _ as *mut _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                &mut return_len,
+            );
+            if query_res != 0 && info.PeakJobMemoryUsed > 0 {
+                let mb = (info.PeakJobMemoryUsed / (1024 * 1024)) as usize;
+                peak_memory_mb = Some(mb);
+                if let Some(mem_limit) = config.limits.memory_limit_mb {
+                    if mb >= mem_limit || exit_code as u32 == 0xC000_0017 {
+                        oom_killed = true;
+                        if termination_reason.is_none() {
+                            termination_reason = Some(TerminationReason::MemoryExceeded);
+                        }
+                    }
+                }
+            }
+        }
+
         // Security check: verify no junctions or symlinks inside workspace escape to host files
         vfs.scratchpad.verify_no_breakouts()?;
 
@@ -368,11 +396,11 @@ impl SandboxDriver for WindowsJobObjectDriver {
             stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
             duration_ms,
             timed_out,
-            oom_killed: false,
+            oom_killed,
             termination_reason,
             stdout_truncated,
             stderr_truncated,
-            peak_memory_mb: None,
+            peak_memory_mb,
         })
     }
 }
