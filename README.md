@@ -1,4 +1,4 @@
-# Cocoon 🛡️
+# Cocoon-Sandbox 🛡️
 
 [![CI](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml/badge.svg)](https://github.com/sunilksundaram/cocoon/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/cocoon-sandbox.svg?color=orange&logo=rust)](https://crates.io/crates/cocoon-sandbox)
