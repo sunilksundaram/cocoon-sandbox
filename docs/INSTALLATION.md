@@ -138,7 +138,7 @@ cocoon --version
 ```
 **Expected Output:**
 ```text
-cocoon 0.1.0
+cocoon 0.2.0
 ```
 
 Now run `cocoon info` to inspect the active driver and detected system runtimes:
@@ -149,7 +149,7 @@ cocoon info
 
 **Example Output:**
 ```text
-Cocoon Sandbox v0.1.0
+Cocoon Sandbox v0.2.0
 ----------------------------------------
 Active Driver : windows-job-object
 Driver Status : Available (Active)

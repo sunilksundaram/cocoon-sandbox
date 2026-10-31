@@ -1,7 +1,7 @@
 # Cocoon Security & Vulnerability Remediation Guide
 
 > **Audience:** AI Agent developers, platform engineers, and security auditors.  
-> **Status:** Production-hardened (v0.1.0+).  
+> **Status:** Production-hardened (v0.2.0+).  
 > **Scope:** Threat model, vulnerability catalog, platform mitigations (Windows & Linux), and agent-safe integration patterns.
 
 ---
