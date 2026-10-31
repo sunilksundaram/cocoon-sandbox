@@ -257,3 +257,17 @@ Add Cocoon as a local Model Context Protocol (MCP) tool in your `claude_desktop_
 ### Q4: Windows file locking error during `cargo build` (`os error 32`)
 * **Cause:** Another process or Windows Defender briefly inspected `target/debug/cocoon.exe` right after execution.
 * **Fix:** Wait 2 seconds and re-run, or add your project folder to Windows Defender's process exclusion list for Cargo.
+
+### Q5: Outbound socket error or `URLError: <urlopen error ...>`
+* **Explanation:** Network access is **default-deny** (`allow_network: false`) to prevent credential exfiltration.
+* **Fix:** Pass `--allow-network` if your script genuinely requires internet or external API access:
+  ```bash
+  cocoon run --allow-network -r python -c "import urllib.request; print(urllib.request.urlopen('https://httpbin.org/ip').read())"
+  ```
+
+### Q6: `ModuleNotFoundError` when importing third-party Python packages (`openpyxl`, `docx`, `pandas`)
+* **Explanation:** To protect against prompt injection and dynamic package poisoning, `cocoon run -r python` runs in isolated mode (`python -I -S -B`), which disables third-party `site-packages`.
+* **Fix:** If you are running trusted document formatting skills, use the dedicated `python-skill` preset:
+  ```bash
+  cocoon run -r python-skill -c "import openpyxl; print('Excel engine ready')"
+  ```

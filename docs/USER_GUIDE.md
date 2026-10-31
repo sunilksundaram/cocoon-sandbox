@@ -21,11 +21,11 @@ Cocoon is purpose-built for AI agents and code execution:
 
 ### Quick Reference
 ```bash
-# 1. Safe execution (current directory is read-only by default, 30s timeout)
+# 1. Safe execution (current directory is read-only, default-deny network, 30s timeout)
 cocoon run -r python -c "print(2 + 2)"
 
-# 2. Run inside an explicit writable workspace
-cocoon run --work ./my_workspace -r node -c "require('fs').writeFileSync('out.txt', 'done')"
+# 2. Run inside an explicit writable workspace with disk quota
+cocoon run --work ./my_workspace --disk 256 -r node -c "require('fs').writeFileSync('out.txt', 'done')"
 
 # 3. Copy-on-Write: Stage repository files into workspace and manipulate them safely
 cocoon run --copy ./config.json --work ./workspace -r python -c "
@@ -35,14 +35,20 @@ d['active'] = True
 json.dump(d, open('config.json', 'w'))
 "
 
-# 4. Polyglot Multi-Language Pipeline (Python -> Node -> Bun in the SAME virtual workspace)
+# 4. Opt-in network access (when task explicitly requires outbound HTTP requests)
+cocoon run --allow-network -r node -c "console.log('Fetching external API...')"
+
+# 5. Polyglot Multi-Language Pipeline (Python -> Node -> Bun in the SAME virtual workspace)
 cocoon pipeline \
   -s "python:open('data.txt', 'w').write('hello from python')" \
   -s "node:console.log('Read by Node:', require('fs').readFileSync('data.txt', 'utf8'))" \
   -s "bun:console.log('Read by Bun:', await Bun.file('data.txt').text())" \
   --json
 
-# 5. Inspect available runtimes on host
+# 6. Structured SIEM JSON Logging
+cocoon --log-json run -r python -c "print('Audit log event')"
+
+# 7. Inspect available runtimes on host
 cocoon info
 ```
 
@@ -61,8 +67,8 @@ Any agent harness using standard function calling can use this tool schema:
     "properties": {
       "runtime": {
         "type": "string",
-        "enum": ["python", "node", "bun", "deno", "go", "java", "rust", "pwsh", "bash", "ruby", "php", "lua"],
-        "description": "The programming language runtime to execute."
+        "enum": ["python", "python-skill", "node", "bun", "deno", "go", "java", "rust", "pwsh", "bash", "ruby", "php", "lua"],
+        "description": "The programming language runtime to execute. Use 'python' for untrusted code (stdlib only) or 'python-skill' for format packages (openpyxl, docx)."
       },
       "code": {
         "type": "string",
@@ -81,6 +87,21 @@ Any agent harness using standard function calling can use this tool schema:
         "type": "integer",
         "default": 30,
         "description": "Maximum allowed execution time in seconds."
+      },
+      "allow_network": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to permit outbound HTTP/network access. Defaults to false (blocked) to prevent credential exfiltration."
+      },
+      "max_processes": {
+        "type": "integer",
+        "default": 32,
+        "description": "Maximum active process cap to prevent fork bombs."
+      },
+      "disk_mb": {
+        "type": "integer",
+        "default": 512,
+        "description": "Disk write quota in Megabytes for the workspace."
       }
     },
     "required": ["runtime", "code"]
@@ -249,13 +270,25 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Cocoon Sandbox")
 
 @mcp.tool()
-def execute(runtime: str, code: str, timeout: int = 30) -> str:
+def execute(
+    runtime: str, 
+    code: str, 
+    timeout: int = 30, 
+    allow_network: bool = False,
+    max_procs: int = 32,
+    disk_mb: int = 512
+) -> str:
     """Run sandboxed code in Python, Node, Bun, Go, PowerShell, etc. Host files are read-only."""
-    p = subprocess.run(
-        ["cocoon", "run", "-r", runtime, "-c", code, "--timeout", str(timeout), "--json"],
-        capture_output=True,
-        text=True
-    )
+    cmd = [
+        "cocoon", "run", "-r", runtime, "-c", code,
+        "--timeout", str(timeout),
+        "--max-procs", str(max_procs),
+        "--disk", str(disk_mb),
+        "--json"
+    ]
+    if allow_network:
+        cmd.append("--allow-network")
+    p = subprocess.run(cmd, capture_output=True, text=True)
     return p.stdout
 
 if __name__ == "__main__":
@@ -524,6 +557,33 @@ Sample log output:
 {"timestamp":"2026-10-30T16:22:15.102Z","level":"INFO","target":"cocoon::runtime","fields":{"message":"Spawning sandboxed process","executable":"node"}}
 {"timestamp":"2026-10-30T16:22:15.115Z","level":"WARN","target":"cocoon::security","fields":{"event":"security_violation","violation_type":"junction_escape","message":"Detected directory junction breakout pointing outside workspace"}}
 ```
+
+---
+
+#### 9. Desktop & Clipboard Isolation (Win32 UI Restrictions)
+* **Default:** Enforced automatically on Windows via Win32 Job Object UI Restrictions (`JobObjectBasicUIRestrictions`).
+* **Protections:**
+  - `JOB_OBJECT_UILIMIT_READCLIPBOARD`: Disallows child processes from calling `GetClipboardData` or PowerShell `Get-Clipboard`. Prevents stealing passwords or tokens from the developer's clipboard.
+  - `JOB_OBJECT_UILIMIT_WRITECLIPBOARD`: Prevents untrusted scripts from poisoning or altering the clipboard.
+  - `JOB_OBJECT_UILIMIT_HANDLES`: Disallows access to USER and GDI handles belonging to processes outside the job, preventing Shatter attacks and window hook injections.
+  - `JOB_OBJECT_UILIMIT_DESKTOP`: Blocks creating or switching desktop viewports.
+
+---
+
+#### 10. Universal Breakout Verification & CWD DLL Defense
+* **Default:** Active on every execution teardown.
+* **Protections:**
+  - **Universal Canonicalization:** Recursively verifies every entry in the workspace upon completion. Any path (symbolic link, Windows NTFS directory junction `0x400`, or hardlink) resolving outside the workspace root triggers an immediate `CocoonError::SecurityViolation`.
+  - **CWD DLL Search Blocking:** Injects `CWDIllegalInDllSearch=0x2` to eliminate DLL preloading attacks from untrusted workspaces on Windows.
+
+---
+
+#### 11. Host IPC & Credential Variable Purging
+* **Default:** Enforced on every execution.
+* **Protections:**
+  - Automatically neutralizes dangerous host IPC pointers: `DOCKER_HOST` (`\\.\pipe\docker_engine`), `SSH_AUTH_SOCK` (OpenSSH agent pipe), `WSL_INTEROP`, and `GPG_AGENT_INFO`.
+  - Automatically purges cloud credentials: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `AZURE_CONFIG_DIR`, and `KUBECONFIG`.
+  - Even if `inherit_env: true` is configured, these sensitive endpoints are never passed to the sandboxed child.
 
 ---
 

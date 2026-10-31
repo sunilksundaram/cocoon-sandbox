@@ -19,12 +19,15 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 ## ⚡ Features
 
 * **Sub-Millisecond Startup:** Runs directly on native operating system primitives (< 5ms) instead of spinning up virtual machines.
+* **Default-Deny Network:** Outbound TCP/UDP sockets are completely blocked by default (`allow_network: false`) to eliminate credential exfiltration. Use `--allow-network` to opt in.
 * **Ironclad Read-Only Protection:** Mount host directories with `--ro` where writes, overwrites, appends, and deletes are physically blocked by kernel ACLs / namespaces.
-* **Ephemeral Virtual Scratchpad:** Automatically redirects temporary files, bytecode caches (`__pycache__`), npm caches, and cargo targets to an isolated in-memory/temp scratchpad.
-* **Rich Built-in Runtime Presets:** Instant support for `python`, `node`, `bun`, `deno`, `go`, `java`, `rust` / `cargo`, `pwsh` / `powershell`, `bash` / `sh`, `ruby`, `php`, and `lua`.
+* **Hermetic Runtimes & Dual-Mode Python:** Untrusted code runs in hermetic standard-library mode (`python -I -S -B`, `node --no-addons`, `ruby --disable-gems`), with a dedicated `python-skill` preset for document processing tools (`openpyxl`, `python-docx`, `pandas`).
+* **Desktop & Clipboard Isolation:** Win32 Job Object UI restrictions prevent child processes from reading the host clipboard, injecting synthetic keystrokes, or intercepting window handles.
+* **Resource & Process Caps:** Hard limits on active processes (`--max-procs 32`), disk write quotas (`--disk 512MB`), memory (`--mem`), and execution timeouts (`--timeout 30s`).
+* **Ephemeral Virtual Scratchpad & Isolated User Profile:** Redirects caches (`__pycache__`, npm, cargo) and synthesizes a clean, isolated dummy user profile (`USERPROFILE`, `HOME`, `APPDATA`).
+* **Universal Breakout Verification:** Recursively scans workspace post-run to detect and reject symlinks, NTFS directory junctions (`0x400`), or hardlinks escaping the workspace root.
 * **Universal Command Execution:** Run any installed compiler or binary toolchain (`gcc`, `clang`, `dotnet`, `zig`, `julia`, etc.) by passing trailing arguments: `cocoon run -- <cmd> [args...]`.
-* **Process & Resource Caps:** Hard limits on memory (RAM) and execution wall-clock timeouts.
-* **Agent-First JSON Protocol:** Emits structured output (`--json`) with exit codes, execution duration, and captured standard streams.
+* **Agent-First JSON Protocol & SIEM Logging:** Emits structured output (`--json`) and NDJSON event logs (`--log-json`) with exit codes, peak memory, output truncation, and termination reasons.
 
 ---
 
@@ -34,7 +37,7 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
                     ┌────────────────────────────┐
                     │    AI Agent / Host App     │
                     └─────────────┬──────────────┘
-                                  │ (CLI / Rust / JSON)
+                                  │ (CLI / Rust / JSON / SIEM)
                     ┌─────────────▼──────────────┐
                     │       Cocoon Engine        │
                     └─────────────┬──────────────┘
@@ -45,9 +48,10 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 │   Linux Driver   │    │   macOS Driver   │    │   Windows Driver   │
 ├──────────────────┤    ├──────────────────┤    ├────────────────────┤
 │ • User Namespaces│    │ • Apple Seatbelt │    │ • Job Objects      │
-│ • ro-bind mounts │    │ • SBPL Profile   │    │ • Inherited Deny   │
-│ • Landlock LSM   │    │ • Ephemeral /tmp │    │   NTFS ACEs        │
-│ • tmpfs scratch  │    │                  │    │ • Scratchpad VFS   │
+│ • ro-bind mounts │    │ • SBPL Profile   │    │ • UI Restrictions  │
+│ • tmpfs /tmp     │    │ • Ephemeral /tmp │    │ • Inherited Deny   │
+│ • tmpfs /dev/shm │    │                  │    │   NTFS ACEs        │
+│ • rlimit caps    │    │                  │    │ • Scratchpad VFS   │
 └──────────────────┘    └──────────────────┘    └────────────────────┘
 ```
 
@@ -74,39 +78,40 @@ cargo install cocoon-sandbox
 cocoon info
 ```
 
-### 2. Run Python with Read-Only Mount
-Mount your project directory as read-only and execute an inspection script:
+### 2. Run Untrusted Python (Hermetic Standard Library)
+Mount your project directory as read-only and execute an inspection script in isolated mode (`-I -S -B`):
 ```bash
 cocoon run --ro ./my_project --runtime python -c "import os; print(os.listdir('.'))"
 ```
 
-### 3. Run Node.js with Memory & Timeout Limits
+### 3. Run Document Format Skills (`python-skill`)
+When running trusted format manipulation tools (e.g. `openpyxl`, `python-docx`, `pandas`), use the `python-skill` preset:
+```bash
+cocoon run --ro ./sheets --runtime python-skill -c "import openpyxl; print('Excel engine ready')"
+```
+
+### 4. Run Node.js with Memory & Timeout Limits
 ```bash
 cocoon run --ro ./data --runtime node -c "console.log('Processed:', 42 * 2)" --timeout 5 --mem 256
 ```
 
-### 4. Run PowerShell in Cocoon
+### 5. Run PowerShell with Isolated Desktop
+PowerShell automatically executes with `-NoProfile -NonInteractive -ExecutionPolicy Bypass` and clipboard isolation:
 ```bash
 cocoon run --ro ./scripts --runtime pwsh -c "Get-ChildItem"
 ```
 
-### 5. Dedicated Work Directory (Create & Manipulate Files)
+### 6. Dedicated Work Directory (Create & Manipulate Files)
 Specify an explicit workspace folder where scripts have full read-write permissions to create, manipulate, and delete files:
 ```bash
 cocoon run --work ./agent_workspace --runtime python -c "open('report.txt', 'w').write('Analyzed')"
 ```
 
-### 6. Safe Copy & Staging (Manipulate Copies While Leaving Originals Untouched)
+### 7. Safe Copy & Staging (Manipulate Copies While Leaving Originals Untouched)
 Mount sensitive files/folders as read-only (`--ro`), and use `--copy` to stage copies into the writable work folder. The sandboxed process can edit and transform the files without altering the originals:
 ```bash
 cocoon run --ro ./repo --copy ./repo/config.json --work ./agent_workspace \
   --runtime python -c "import json; d = json.load(open('config.json')); d['active'] = True; json.dump(d, open('config.json', 'w'))"
-```
-
-### 7. Custom Temp Directory
-Redirect `TMP`, `TEMP`, and runtime bytecode caches to a specific directory:
-```bash
-cocoon run --temp ./my_scratch --runtime python -c "import os; print(os.environ['TMP'])"
 ```
 
 ### 8. Structured JSON Output for AI Agents
@@ -123,7 +128,11 @@ cocoon run --ro . --runtime python -c "print('Computed:', 2**8)" --json
   "stderr": "",
   "duration_ms": 184.2,
   "timed_out": false,
-  "oom_killed": false
+  "oom_killed": false,
+  "termination_reason": null,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "peak_memory_mb": 14
 }
 ```
 
@@ -149,16 +158,28 @@ cocoon pipeline \
 
 ## 🔒 Security Guarantees & Built-in Invariants
 
-1. **Read-Only by Default (`--ro .`):**
+1. **Default-Deny Network (`allow_network: false`):**
+   * Sockets and outbound traffic are completely blocked by default. Sinks proxy variables to `127.0.0.1:0` and unshares network namespaces on Linux. Opt-in with `--allow-network`.
+2. **Read-Only by Default (`--ro .`):**
    * Even if you omit `--ro`, the current working directory is automatically protected as **strictly read-only**.
    * Opening files in write mode (`'w'`, `'a'`) or attempting deletions triggers immediate `PermissionError` / `EPERM` enforced at the OS kernel level.
-2. **Zero Host Writes (Workdir Isolation):**
+3. **Zero Host Writes (Workdir Isolation):**
    * Sandboxed processes can **never** write to anything other than the designated `--work` folder (or the auto-cleaned ephemeral scratchpad).
    * Use `--copy <path>` to stage copies of host files into the work folder and manipulate them freely without touching originals.
-3. **30-Second Execution Timeout by Default:**
-   * Every execution is automatically capped at **30 seconds** by default (override with `--timeout <secs>`). Runaway scripts or infinite loops auto-terminate cleanly without hanging.
-4. **No Bytecode or Cache Pollution:**
+4. **Desktop & Clipboard Isolation:**
+   * Win32 Job Object UI restrictions prevent child processes from reading the host clipboard (`JOB_OBJECT_UILIMIT_READCLIPBOARD`), modifying the clipboard, or sending synthetic window messages to other applications.
+5. **30-Second Execution Timeout by Default:**
+   * Every execution is automatically capped at **30 seconds** by default (override with `--timeout <secs>`). Runaway scripts or infinite loops auto-terminate cleanly via atomic process tree termination without hanging.
+6. **Active Process Cap (`max_processes: 32`):**
+   * Mitigates fork bombs and handle exhaustion by capping active child processes to 32 by default.
+7. **Storage Quota Enforcement (`disk_limit_mb: 512MB`):**
+   * Mitigates disk exhaustion attacks by capping workspace writes at 512 MB.
+8. **No Bytecode or Cache Pollution:**
    * Python bytecode caching (`PYTHONPYCACHEPREFIX`), pip caches (`PIP_CACHE_DIR`), npm caches (`npm_config_cache`), and cargo build artifacts are redirected to an ephemeral scratchpad that is destroyed upon exit.
+9. **Universal Breakout Verification:**
+   * Post-run canonicalization scans detect and reject any symlink, NTFS junction (`0x400`), or hardlink attempting to point outside the workspace.
+
+For a comprehensive breakdown of all threat models, CVE remediations, and OS defensive layers, see the **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)**.
 
 ---
 
@@ -167,7 +188,7 @@ cocoon pipeline \
 * [`crates/cocoon-core`](crates/cocoon-core): Core interfaces, configuration schema, and traits.
 * [`crates/cocoon-fs`](crates/cocoon-fs): Virtual filesystem views, ephemeral scratchpads, and read-only guards.
 * [`crates/cocoon-platform`](crates/cocoon-platform): Native sandbox drivers (Windows Job Objects & ACLs, Linux Namespaces & Bubblewrap, macOS Seatbelt).
-* [`crates/cocoon-runtimes`](crates/cocoon-runtimes): Auto-resolvers and isolation presets for Python, Node, PowerShell, Bash, and Rust.
+* [`crates/cocoon-runtimes`](crates/cocoon-runtimes): Auto-resolvers and isolation presets for Python, Node, Bun, Deno, Go, Rust, PowerShell, Bash, Ruby, and PHP.
 * [`crates/cocoon-cli`](crates/cocoon-cli): The `cocoon` command-line executable.
 
 ---

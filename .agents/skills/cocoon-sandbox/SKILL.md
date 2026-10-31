@@ -11,6 +11,7 @@ description: >-
 
 `cocoon` is a native, featherweight cross-platform sandbox (< 5ms startup) that provides virtual and read-only filesystem views. It allows agents to safely execute code in **Python, Node.js, Bun, Deno, Go, Java, Rust, PowerShell, Bash, Ruby, PHP, Lua, or any installed compiler**.
 
+*For complete security specifications, see the [Security & Vulnerability Remediation Guide](../../../docs/SECURITY_AND_VULNERABILITIES.md).*  
 *For framework integration patterns (AutoGen, LangChain, LangGraph, LlamaIndex, Claude/MCP, Hermes), see the [User & Integration Guide](../../../docs/USER_GUIDE.md).*
 
 ---
@@ -18,12 +19,12 @@ description: >-
 ## 🎯 When to Use Cocoon
 
 Use `cocoon` whenever you need to:
-1. **Safely execute code:** Run generated code, user-provided scripts, or benchmark evaluations without risking the host system.
-2. **Inspect data read-only:** Mount repositories or datasets with `--ro` to ensure files cannot be accidentally modified or deleted.
-3. **Experiment with files safely (Copy-on-Write):** Use `--copy <path>` to stage a copy of host files into a writable workspace and manipulate them without altering the originals.
-4. **Install local dependencies:** Install packages via `pip`, `npm`, `bun`, or PowerShell modules inside an isolated workspace without polluting the host or requiring admin.
+1. **Safely execute untrusted code:** Run LLM-generated code or evaluate user scripts with default-deny network, read-only host mounts, and desktop/clipboard isolation.
+2. **Inspect data read-only:** Mount repositories or datasets with `--ro` to guarantee that files cannot be modified, overwritten, or deleted.
+3. **Experiment with files safely (Copy-on-Write):** Use `--copy <path>` to stage a copy of host files into a writable workspace and manipulate them without altering originals.
+4. **Run document format skills:** Use `-r python-skill` to manipulate Excel (`openpyxl`), Word (`python-docx`), or datasets (`pandas`) without host mutation.
 5. **Run multi-language pipelines:** Chain together steps in different languages (e.g. Python $\to$ Node $\to$ Bun $\to$ PowerShell) sharing the exact same virtual workspace.
-6. **Enforce hard limits:** Guard against infinite loops or runaway memory with `--timeout <secs>` and `--mem <mb>`.
+6. **Enforce hard limits:** Guard against infinite loops, fork bombs, or memory leaks with `--timeout <secs>`, `--max-procs <count>`, `--disk <mb>`, and `--mem <mb>`.
 
 ---
 
@@ -44,16 +45,22 @@ cocoon run --ro . --runtime python -c "print(2 + 2)" --json
   "stderr": "",
   "duration_ms": 18.4,
   "timed_out": false,
-  "oom_killed": false
+  "oom_killed": false,
+  "termination_reason": null,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "peak_memory_mb": 14
 }
 ```
+
+*Note: If `stdout_truncated` is `true`, output exceeded the 10 MB buffer limit.*
 
 ---
 
 ### 2. Common Execution Patterns
 
-#### Pattern A: Read-Only Repository Inspection
-Mount the codebase as strictly read-only (`--ro`). Attempts to write or delete will fail immediately at the filesystem level:
+#### Pattern A: Read-Only Repository Inspection (Untrusted Python)
+Mount the codebase as strictly read-only (`--ro`). Untrusted code runs in isolated standard library mode (`-I -S -B`):
 ```bash
 cocoon run --ro ./my_project --runtime python -c "
 import os
@@ -62,7 +69,19 @@ print(f'Found {len(files)} Python files')
 " --json
 ```
 
-#### Pattern B: Safe Copy-on-Write Staging
+#### Pattern B: Document Skills (`python-skill`)
+When executing tools that require installed libraries (e.g., `openpyxl`, `python-docx`, `pandas`), use `-r python-skill`:
+```bash
+cocoon run --ro ./data --work ./reports --runtime python-skill -c "
+import openpyxl
+wb = openpyxl.Workbook()
+wb.active.title = 'Summary'
+wb.save('report.xlsx')
+print('Report generated')
+" --json
+```
+
+#### Pattern C: Safe Copy-on-Write Staging
 Mount source files as read-only (`--ro`), stage a copy into the writable work folder (`--copy`), and freely modify the copy:
 ```bash
 cocoon run \
@@ -75,7 +94,7 @@ cocoon run \
 ```
 *(The original `./configs/app.json` remains completely untouched).*
 
-#### Pattern C: Creating & Manipulating Output Files
+#### Pattern D: Creating & Manipulating Output Files
 Provide an explicit `--work` directory to write generated code, artifacts, or logs:
 ```bash
 cocoon run --work ./agent_output --runtime node -c "
@@ -84,25 +103,16 @@ fs.writeFileSync('result.json', JSON.stringify({ status: 'completed', timestamp:
 " --json
 ```
 
-#### Pattern D: Installing and Using Packages in the Sandbox
-Packages can be installed inside `--work` without affecting the host environment:
-* **Python:**
-  ```bash
-  cocoon run --work ./py_env --runtime python -c "
-  import subprocess, sys
-  subprocess.run([sys.executable, '-m', 'pip', 'install', '--target', '.', 'pyyaml'], check=True)
-  import yaml
-  print('YAML loaded successfully')
-  " --json
-  ```
-* **Node.js / Bun:**
-  ```bash
-  cocoon run --work ./js_env --runtime bun -c "
-  require('child_process').execSync('bun add lodash');
-  const _ = require('lodash');
-  console.log(_.chunk([1, 2, 3, 4], 2));
-  " --json
-  ```
+#### Pattern E: Explicit Network Opt-In (Scraping / APIs)
+Network is blocked by default (`allow_network: false`). If your task explicitly requires outbound HTTP requests, pass `--allow-network`:
+```bash
+cocoon run --allow-network --runtime node -c "
+const https = require('https');
+https.get('https://api.github.com/zen', { headers: { 'User-Agent': 'Cocoon' } }, res => {
+  res.pipe(process.stdout);
+});
+" --json
+```
 
 ---
 
@@ -124,9 +134,9 @@ cocoon pipeline \
   "success": true,
   "total_duration_ms": 285.4,
   "steps": [
-    { "step": 1, "runtime": "python", "exit_code": 0, "stdout": "", "duration_ms": 190.2, "timed_out": false },
-    { "step": 2, "runtime": "bun", "exit_code": 0, "stdout": "", "duration_ms": 18.5, "timed_out": false },
-    { "step": 3, "runtime": "pwsh", "exit_code": 0, "stdout": "{\"data\":[10,20,30],\"total\":60}", "duration_ms": 76.7, "timed_out": false }
+    { "step": 1, "runtime": "python", "exit_code": 0, "stdout": "", "stderr": "", "duration_ms": 190.2, "timed_out": false, "oom_killed": false, "stdout_truncated": false, "stderr_truncated": false },
+    { "step": 2, "runtime": "bun", "exit_code": 0, "stdout": "", "stderr": "", "duration_ms": 18.5, "timed_out": false, "oom_killed": false, "stdout_truncated": false, "stderr_truncated": false },
+    { "step": 3, "runtime": "pwsh", "exit_code": 0, "stdout": "{\"data\":[10,20,30],\"total\":60}\r\n", "stderr": "", "duration_ms": 76.7, "timed_out": false, "oom_killed": false, "stdout_truncated": false, "stderr_truncated": false }
   ]
 }
 ```
@@ -151,22 +161,35 @@ To inspect which runtimes are available on the current host:
 ```bash
 cocoon info
 ```
-Supported presets: `python`, `node`, `bun`, `deno`, `go`, `java`, `rust` / `cargo`, `pwsh` / `powershell`, `bash` / `sh`, `ruby`, `php`, `lua`.
+Supported presets: `python`, `python-skill`, `node`, `bun`, `deno`, `go`, `java`, `rust` / `cargo`, `pwsh` / `powershell`, `bash` / `sh`, `ruby`, `php`, `lua`.
 
 ---
 
 ## 🔒 Built-in Sandbox Invariants (Enforced by Default)
 
-1. **Read-Only by Default (`--ro .`):**
+1. **Default-Deny Network (`allow_network: false`):**
+   * Sockets and outbound TCP/UDP are blocked by default to eliminate credential exfiltration. Only enabled if `--allow-network` is explicitly set.
+
+2. **Read-Only by Default (`--ro .`):**
    * The current working directory is automatically mounted as **strictly read-only** by default.
    * Any attempt by scripts or code to write, append, or delete host files is physically blocked at the OS kernel level (`PermissionError: Permission denied`).
 
-2. **Zero Host Writes (Strict Workdir Isolation):**
+3. **Zero Host Writes (Strict Workdir Isolation):**
    * Code can **never** get write access to anything other than the designated `--work` folder (or the auto-cleaned ephemeral scratchpad).
    * To edit, refactor, or test modifications on existing code, use `--copy <path>` to stage a copy into the work folder and manipulate it there safely.
 
-3. **30-Second Execution Timeout by Default:**
+4. **Desktop & Clipboard Isolation:**
+   * Win32 Job Object UI restrictions prevent child processes from accessing the user clipboard (`GetClipboardData`), injecting synthetic keystrokes, or intercepting window handles.
+
+5. **30-Second Execution Timeout by Default:**
    * Every execution is automatically capped at **30 seconds** by default (override with `--timeout <secs>`). Infinite loops or hangs will auto-terminate without freezing the agent.
 
-4. **Verify Telemetry in `--json`:**
-   * Always verify `result.exit_code === 0` and `result.timed_out === false` before consuming `result.stdout`.
+6. **Process & Storage Caps:**
+   * Active processes capped at 32 (`--max-procs 32`) to prevent fork bombs.
+   * Disk write quota capped at 512 MB (`--disk 512`) to prevent disk exhaustion.
+
+7. **Universal Breakout Verification:**
+   * Post-run canonicalization scans detect and reject any symlink, NTFS junction (`0x400`), or hardlink attempting to point outside the workspace root.
+
+8. **Verify Telemetry in `--json`:**
+   * Always verify `result.exit_code === 0` and `result.timed_out === false` before consuming `result.stdout`. Check `result.termination_reason` if execution fails.

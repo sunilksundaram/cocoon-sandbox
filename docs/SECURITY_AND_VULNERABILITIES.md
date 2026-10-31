@@ -279,3 +279,4 @@ Cocoon maintains an automated regression test suite in [`crates/cocoon-cli/tests
 9. `regression_rust_preset_offline`: Asserts `cargo --offline` invariant.
 10. `regression_go_preset_offline`: Asserts `go run -mod=readonly` invariant.
 11. `regression_preset_runtime_resolution`: Asserts skipping of 0-byte Windows Store execution alias stubs.
+
