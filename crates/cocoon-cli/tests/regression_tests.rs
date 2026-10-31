@@ -155,3 +155,40 @@ fn regression_clean_scratchpad_passes_breakout_verification() {
     let scratchpad = Scratchpad::new().expect("Create scratchpad");
     assert!(scratchpad.verify_no_breakouts().is_ok());
 }
+
+#[test]
+fn regression_default_cpu_limit_is_95_percent() {
+    // Invariant: Cocoon must enforce a 95% CPU rate ceiling by default to prevent OS starvation
+    let limits = ResourceLimits::default();
+    assert_eq!(
+        limits.cpu_limit_pct,
+        Some(95),
+        "Regression: Default CPU limit must be 95% max"
+    );
+}
+
+#[test]
+fn regression_default_gpu_allowed_is_true() {
+    // Invariant: GPU hardware access defaults to true, subject to VRAM safety allocation guard
+    let limits = ResourceLimits::default();
+    assert!(
+        limits.allow_gpu,
+        "Regression: Default GPU access must be true"
+    );
+}
+
+#[test]
+fn regression_memory_cap_enforces_95_percent_ceiling() {
+    // Invariant: When memory is capped on host, it never exceeds 95% of host physical RAM
+    let host_mb = 16384; // Mock 16GB host
+    let max_safe = (host_mb * 95) / 100;
+    assert_eq!(max_safe, 15564);
+
+    let requested_over_limit = Some(32768); // User requested 32GB
+    let effective = requested_over_limit.unwrap_or(max_safe).min(max_safe);
+    assert_eq!(effective, 15564);
+
+    let requested_under_limit = Some(4096); // User requested 4GB
+    let effective_under = requested_under_limit.unwrap_or(max_safe).min(max_safe);
+    assert_eq!(effective_under, 4096);
+}

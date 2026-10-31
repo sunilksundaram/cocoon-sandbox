@@ -85,6 +85,14 @@ enum Commands {
         #[arg(long = "disk", value_name = "MB")]
         disk_mb: Option<usize>,
 
+        /// Maximum CPU limit in percent (capped at 95% MAX to prevent host OS starvation)
+        #[arg(long = "cpu", value_name = "PERCENT")]
+        cpu_pct: Option<u32>,
+
+        /// Completely isolate and mask GPU hardware (prevents VRAM exhaustion and driver crashes)
+        #[arg(long = "no-gpu")]
+        no_gpu: bool,
+
         /// Format execution summary as JSON (ideal for AI Agents)
         #[arg(long = "json")]
         json: bool,
@@ -140,6 +148,14 @@ enum Commands {
         /// Maximum disk quota in Megabytes allowed for workspace writes (default: 512MB)
         #[arg(long = "disk", value_name = "MB")]
         disk_mb: Option<usize>,
+
+        /// Maximum CPU limit in percent (capped at 95% MAX to prevent host OS starvation)
+        #[arg(long = "cpu", value_name = "PERCENT")]
+        cpu_pct: Option<u32>,
+
+        /// Completely isolate and mask GPU hardware (prevents VRAM exhaustion and driver crashes)
+        #[arg(long = "no-gpu")]
+        no_gpu: bool,
 
         /// Format execution summary as JSON (ideal for AI Agents)
         #[arg(long = "json")]
@@ -246,6 +262,8 @@ fn main() -> Result<()> {
             allow_network,
             max_processes,
             disk_mb,
+            cpu_pct,
+            no_gpu,
             json,
             raw_cmd,
         } => {
@@ -293,11 +311,12 @@ fn main() -> Result<()> {
             let limits = ResourceLimits {
                 timeout: Some(effective_timeout),
                 memory_limit_mb: memory_mb,
-                cpu_limit_pct: None,
+                cpu_limit_pct: Some(cpu_pct.unwrap_or(95).clamp(1, 95)),
                 allow_network,
                 max_processes: max_processes.or(Some(32)),
                 max_output_bytes: Some(10 * 1024 * 1024),
                 disk_limit_mb: disk_mb.or(Some(512)),
+                allow_gpu: !no_gpu,
             };
 
             let config = SandboxConfig {
@@ -351,6 +370,8 @@ fn main() -> Result<()> {
             memory_mb,
             max_processes,
             disk_mb,
+            cpu_pct,
+            no_gpu,
             json,
         } => {
             if steps.is_empty() {
@@ -419,11 +440,12 @@ fn main() -> Result<()> {
                     limits: ResourceLimits {
                         timeout: Some(effective_timeout),
                         memory_limit_mb: memory_mb,
-                        cpu_limit_pct: None,
+                        cpu_limit_pct: Some(cpu_pct.unwrap_or(95).clamp(1, 95)),
                         allow_network,
                         max_processes: max_processes.or(Some(32)),
                         max_output_bytes: Some(10 * 1024 * 1024),
                         disk_limit_mb: disk_mb.or(Some(512)),
+                        allow_gpu: !no_gpu,
                     },
                     stdin_data: None,
                 };

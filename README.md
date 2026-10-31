@@ -28,6 +28,9 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 * **Universal Breakout Verification:** Recursively scans workspace post-run to detect and reject symlinks, NTFS directory junctions (`0x400`), or hardlinks escaping the workspace root.
 * **Universal Command Execution:** Run any installed compiler or binary toolchain (`gcc`, `clang`, `dotnet`, `zig`, `julia`, etc.) by passing trailing arguments: `cocoon run -- <cmd> [args...]`.
 * **High-Throughput Heavy Data & Multimedia:** Native NVMe read speeds (3–7 GB/s) with zero virtualization overhead for multi-gigabyte Excel data (Pandas/Polars), multi-hundred page PDF conversions, and video/audio processing (`ffmpeg`).
+* **Hardware-Aware 95% Ceiling & Host Protection:** Auto-detects host physical RAM and CPU cores across Windows, Linux, and macOS. Clamps resource usage to **95% MAX of physical hardware**, guaranteeing the host OS never freezes, thrashes, or blue-screens.
+* **GPU VRAM & Driver Isolation (`--no-gpu`):** Multi-vendor driver detachment (NVIDIA CUDA, AMD ROCm/HIP, Intel oneAPI, OpenCL) via `--no-gpu`. Auto-injects PyTorch VRAM fragmentation guards (`max_split_size_mb:128`) when GPU is permitted for local SLMs and fine-tuning.
+* **Process Priority & Core Dump Hardening:** Permanently locks process priority to `NORMAL_PRIORITY_CLASS` (Windows) and blocks real-time elevation (`RLIMIT_RTPRIO=0` on Linux) to prevent scheduler starvation. Suppresses crash core dumps (`RLIMIT_CORE=0`) to prevent disk flooding and prompt leaks.
 * **Agent-First JSON Protocol & SIEM Logging:** Emits structured output (`--json`) and NDJSON event logs (`--log-json`) with exit codes, peak memory, output truncation, and termination reasons.
 
 ---
@@ -166,6 +169,20 @@ print(f'Processed {len(df):,} rows successfully.')
 " --json
 ```
 
+### 11. Local SLM Inference & Fine-Tuning (GPU vs. `--no-gpu`)
+Run local Small Language Models (SLMs) such as Phi-3, Llama-3-8B, or Mistral-7B with automatic PyTorch VRAM protection:
+```bash
+# GPU enabled with VRAM fragmentation protection:
+cocoon run --ro ./models --work ./output --timeout 180 --disk 2048 -r python-skill -c "
+from transformers import AutoModelForCausalLM, AutoTokenizer
+model = AutoModelForCausalLM.from_pretrained('models/Phi-3-mini', device_map='auto')
+print('Model ready for inference.')
+" --json
+
+# Or run strictly on CPU with complete GPU driver detachment:
+cocoon run --no-gpu --ro ./models --work ./output --timeout 180 -r python-skill -c "print('CPU only')"
+```
+
 ---
 
 ## 🔒 Security Guarantees & Built-in Invariants
@@ -190,6 +207,14 @@ print(f'Processed {len(df):,} rows successfully.')
    * Python bytecode caching (`PYTHONPYCACHEPREFIX`), pip caches (`PIP_CACHE_DIR`), npm caches (`npm_config_cache`), and cargo build artifacts are redirected to an ephemeral scratchpad that is destroyed upon exit.
 9. **Universal Breakout Verification:**
    * Post-run canonicalization scans detect and reject any symlink, NTFS junction (`0x400`), or hardlink attempting to point outside the workspace.
+10. **Hardware-Aware 95% Ceiling:**
+    * Auto-detects physical RAM and clamps memory allocations to `(Host Physical RAM * 0.95)`, mathematically preventing host paging thrashing or blue screens even if `--mem` is omitted.
+11. **95% CPU Rate Cap & Scheduler Lockout:**
+    * Enforces `NORMAL_PRIORITY_CLASS` (Windows) and `RLIMIT_RTPRIO=0` (Linux) to permanently block untrusted code from preempting host OS schedulers or system drivers. Clamps CPU rate to 95% MAX.
+12. **GPU VRAM & Driver Isolation (`--no-gpu`):**
+    * Strips and masks driver interfaces across NVIDIA, AMD ROCm/HIP, Intel, and OpenCL when `--no-gpu` is passed. Auto-injects `PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"` when GPU is enabled.
+13. **Crash Core Dump Suppression:**
+    * Injects `RLIMIT_CORE=0` on Linux and suppresses WER crash popups on Windows, eliminating multi-gigabyte core dumps and prompt memory leakage.
 
 For a comprehensive breakdown of all threat models, CVE remediations, and OS defensive layers, see the **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)**.
 

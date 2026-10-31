@@ -109,6 +109,20 @@ impl SandboxDriver for LinuxNamespaceDriver {
             cmd.env(k, v);
         }
 
+        // Enforce GPU isolation or safety guards
+        if !config.limits.allow_gpu {
+            cmd.env("CUDA_VISIBLE_DEVICES", "");
+            cmd.env("ROCR_VISIBLE_DEVICES", "");
+            cmd.env("HIP_VISIBLE_DEVICES", "");
+            cmd.env("OPENCL_DEVICE_NAME", "");
+            cmd.env("GPU_DEVICE_ORDINAL", "");
+            cmd.env("NVIDIA_VISIBLE_DEVICES", "void");
+            cmd.env("ONEAPI_DEVICE_SELECTOR", "none");
+            cmd.env("SYCL_DEVICE_FILTER", "none");
+        } else {
+            cmd.env("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128");
+        }
+
         // Explicitly strip host credential and IPC socket environment variables even if inherit_env is enabled
         for dangerous_var in &[
             "DOCKER_HOST",
@@ -136,7 +150,7 @@ impl SandboxDriver for LinuxNamespaceDriver {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // Apply Linux resource caps (memory limit, process limit, and file size quota)
+        // Apply Linux resource caps (memory limit, process limit, priority, and file size quota)
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::process::CommandExt;
@@ -145,14 +159,39 @@ impl SandboxDriver for LinuxNamespaceDriver {
             let disk_mb = config.limits.disk_limit_mb;
             unsafe {
                 cmd.pre_exec(move || {
-                    if let Some(mb) = mem_mb {
-                        let bytes = (mb * 1024 * 1024) as u64;
-                        let rlim = libc::rlimit {
-                            rlim_cur: bytes,
-                            rlim_max: bytes,
-                        };
-                        libc::setrlimit(libc::RLIMIT_AS, &rlim);
-                    }
+                    // Auto-detect host physical memory to enforce strict 95% ceiling
+                    let host_phys_mb = {
+                        let pages = libc::sysconf(libc::_SC_PHYS_PAGES);
+                        let page_size = libc::sysconf(libc::_SC_PAGESIZE);
+                        if pages > 0 && page_size > 0 {
+                            ((pages as u64 * page_size as u64) / (1024 * 1024)) as usize
+                        } else {
+                            4096
+                        }
+                    };
+                    let max_safe_mem_mb = (host_phys_mb * 95) / 100;
+                    let effective_mem_mb = mem_mb.unwrap_or(max_safe_mem_mb).min(max_safe_mem_mb);
+                    let bytes = (effective_mem_mb as u64) * 1024 * 1024;
+                    let rlim_mem = libc::rlimit {
+                        rlim_cur: bytes,
+                        rlim_max: bytes,
+                    };
+                    libc::setrlimit(libc::RLIMIT_AS, &rlim_mem);
+
+                    // Block real-time priority elevation to prevent preempting host OS scheduler
+                    let rlim_rtprio = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    libc::setrlimit(libc::RLIMIT_RTPRIO, &rlim_rtprio);
+
+                    // Suppress core dumps to avoid disk exhaustion and credential leaks
+                    let rlim_core = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    libc::setrlimit(libc::RLIMIT_CORE, &rlim_core);
+
                     if let Some(procs) = max_p {
                         let rlim = libc::rlimit {
                             rlim_cur: procs as u64,

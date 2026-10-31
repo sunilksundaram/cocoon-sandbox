@@ -118,6 +118,12 @@ Standard user scripts can quietly read your clipboard (`GetClipboardData`) to st
 - **Document Skills:** Trusted format tools run via `python-skill` (loads `openpyxl`, `python-docx`, `pandas`).
 - **Other Runtimes:** Node runs with `--no-addons` and neutralizes `NODE_OPTIONS`; Ruby runs with `--disable-gems`; PHP runs with `-n` (ignores `php.ini`). Offline toolchain flags are injected automatically.
 
+### Invariant 7: Hardware-Aware 95% Ceiling & Real-Time Scheduler Lockout
+Unbounded execution of machine learning models or multi-threaded loops can starve the host OS scheduler or exhaust physical RAM. Cocoon auto-detects host physical memory and CPU cores via native OS APIs (`GlobalMemoryStatusEx` on Windows, `sysconf` on Linux), automatically capping memory usage to **95% of host physical RAM** and clamping CPU rates. Furthermore, process priorities are locked to `NORMAL_PRIORITY_CLASS` on Windows and `RLIMIT_RTPRIO=0` on Linux, making it mathematically impossible for untrusted code to elevate to Realtime priority and freeze host input/display drivers.
+
+### Invariant 8: GPU VRAM Isolation & Allocator Protection (`--no-gpu` vs. SLM Inference)
+Win32 Job Objects and Linux cgroups do not govern GPU VRAM. An untrusted script allocating 100% of GPU memory can crash the Windows Desktop Window Manager (`dwm.exe`) or cause a GPU driver reset. Cocoon provides complete multi-vendor detachment (`--no-gpu`) across NVIDIA, AMD ROCm/HIP, Intel, and OpenCL. When GPU acceleration is permitted for local Small Language Models (SLMs like Phi-3 or Llama-3), Cocoon automatically injects PyTorch VRAM allocator fragmentation guards (`max_split_size_mb:128`) and suppresses crash core dumps (`RLIMIT_CORE=0`).
+
 ---
 
 ## 4. The Killer Feature: Polyglot Multi-Language Pipelines
@@ -246,6 +252,8 @@ cocoon run --ro ./media --work ./audio --timeout 300 --disk 4096 -- \
 | **Large File I/O Throughput (5GB file)** | 3,000–7,000 MB/s | ⚠️ 300–600 MB/s (VirtIO-FS) | ❌ Restricted | ✅ **3,000–7,000 MB/s (NVMe)** |
 | **Default Network Security** | ❌ Full Access | ⚠️ Allowed by default | ❌ Restricted | ✅ **Default-Deny (`allow_network: false`)** |
 | **Desktop & Clipboard Isolation** | ❌ None | ✅ Isolated (separate OS) | ✅ Isolated | ✅ **Win32 Job UI Restrictions** |
+| **Hardware 95% Host Cap** | ❌ None | ⚠️ Static manual caps | ❌ Isolated | ✅ **Auto-Calculated 95% Ceiling** |
+| **GPU Isolation & VRAM Guard** | ❌ Full Access | ⚠️ Requires nvidia-docker | ❌ None | ✅ **`--no-gpu` & Allocator Guard** |
 | **C-Extension Support (NumPy, PyTorch)** | ✅ Full | ✅ Full | ❌ Very Limited | ✅ **Full** |
 | **Multi-Language Runtimes** | ✅ Any installed | ⚠️ Requires massive images | ❌ Language-specific | ✅ **12+ Native Runtimes** |
 | **Shared Multi-Language Pipeline** | ❌ Unsafe | ⚠️ Complex mounts | ❌ Difficult | ✅ **Built-in (`cocoon pipeline`)** |

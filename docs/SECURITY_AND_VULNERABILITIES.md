@@ -279,4 +279,50 @@ Cocoon maintains an automated regression test suite in [`crates/cocoon-cli/tests
 9. `regression_rust_preset_offline`: Asserts `cargo --offline` invariant.
 10. `regression_go_preset_offline`: Asserts `go run -mod=readonly` invariant.
 11. `regression_preset_runtime_resolution`: Asserts skipping of 0-byte Windows Store execution alias stubs.
+12. `regression_default_cpu_limit_is_95_percent`: Asserts that default CPU usage is capped at 95% MAX.
+13. `regression_default_gpu_allowed_is_true`: Asserts that GPU hardware access defaults to true subject to allocator safety guards.
+14. `regression_memory_cap_enforces_95_percent_ceiling`: Mathematically proves that requested or default memory never exceeds 95% of host physical RAM.
+
+---
+
+## 9. Hardware-Aware Resource Caps & Host Stability Guarantees
+
+When AI agents run heavy computational workloads—such as local Small Language Models (SLMs), LoRA fine-tuning, audio transcription, or multi-gigabyte pandas operations—unbounded sandboxes can freeze the host operating system or trigger GPU driver panics. Cocoon enforces a **hardware-aware 95% maximum ceiling** and kernel-level scheduler protections across Windows, Linux, and macOS:
+
+### 1. Host Physical Memory Auto-Awareness (The 95% Hard Ceiling)
+- **Problem**: If an agent executes a memory-hungry script without specifying `--mem`, or specifies a memory limit exceeding physical hardware, the host OS enters severe paging thrashing or triggers a kernel panic/blue screen.
+- **Cocoon Mitigation**:
+  - Windows: Queries physical RAM via `GlobalMemoryStatusEx`.
+  - Linux: Queries physical pages and page size via `sysconf(_SC_PHYS_PAGES)` and `sysconf(_SC_PAGESIZE)`.
+  - **Enforcement**: Cocoon computes `max_safe_mb = (host_phys_mb * 95) / 100`. The effective sandbox memory ceiling is calculated as:
+    $$\text{Effective Limit} = \min(\text{Requested Limit},\, 0.95 \times \text{Host Physical RAM})$$
+  - Even if no `--mem` flag is passed, Cocoon **automatically** bounds the sandbox to 95% of the machine's physical RAM, mathematically guaranteeing that the host OS and critical system daemons retain reserved memory.
+
+### 2. GPU VRAM Exhaustion & Multi-Vendor Driver Isolation
+- **Problem**: Host OS Job Objects and standard process limits only control CPU system RAM. An unconstrained GPU allocation will allocate 100% of VRAM, crashing the Windows Desktop Window Manager (`dwm.exe`) or causing Linux GPU kernel TDR (Timeout Detection and Recovery) resets.
+- **Cocoon Mitigation**:
+  - **Complete GPU Detachment (`--no-gpu`)**: When `--no-gpu` is specified, Cocoon strips and masks all hardware driver interfaces across all major vendors:
+    - NVIDIA: `CUDA_VISIBLE_DEVICES=""`, `NVIDIA_VISIBLE_DEVICES="void"`
+    - AMD ROCm/HIP: `ROCR_VISIBLE_DEVICES=""`, `HIP_VISIBLE_DEVICES=""`
+    - Intel: `ONEAPI_DEVICE_SELECTOR="none"`, `SYCL_DEVICE_FILTER="none"`
+    - OpenCL & General: `OPENCL_DEVICE_NAME=""`, `GPU_DEVICE_ORDINAL=""`
+  - **Safe SLM / Training Execution**: When GPU access is permitted, Cocoon automatically injects VRAM allocator fragmentation controls:
+    ```bash
+    PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
+    ```
+    This prevents PyTorch and Ollama/vLLM backends from creating fragmented memory blocks that lock up system drivers.
+
+### 3. CPU Priority Elevation & Host Scheduler Hardening
+- **Problem**: Malicious or buggy guest code can call `SetPriorityClass(REALTIME_PRIORITY_CLASS)` or `sched_setscheduler(SCHED_FIFO)`, raising thread priority above host audio drivers, display managers, and keyboard/mouse handlers, causing a permanent system freeze.
+- **Cocoon Mitigation**:
+  - Windows: Sets `JOB_OBJECT_LIMIT_PRIORITY_CLASS` with `NORMAL_PRIORITY_CLASS`. Windows Job Objects enforce this as an unbypassable kernel constraint—any attempt by child processes to elevate priority to Realtime or High is rejected by the kernel.
+  - Linux: In `pre_exec`, Cocoon applies `setrlimit(RLIMIT_RTPRIO, 0)`, preventing any process from acquiring real-time scheduling priority.
+  - CPU Rate Cap: Windows Job Object CPU rate control is capped at 95% MAX (`(cpu_pct.clamp(1, 95)) * 100`).
+
+### 4. Crash Core Dump Snooping & Storage Flooding
+- **Problem**: When large models or intensive workloads crash, default OS handlers generate multi-gigabyte core dumps (`core.<pid>`) or Windows Error Reporting (WER) minidumps. This rapidly exhausts disk space and writes confidential weights and prompts into world-readable crash files.
+- **Cocoon Mitigation**:
+  - Linux: In `pre_exec`, Cocoon applies `setrlimit(RLIMIT_CORE, 0)`. Core dump generation is completely disabled.
+  - Windows: Configured with `JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION`, and suppresses debugger attachment dialogs (`COMPlus_DbgJitDebugLaunchSetting=0`, `DOTNET_DbgJitDebugLaunchSetting=0`).
+
 

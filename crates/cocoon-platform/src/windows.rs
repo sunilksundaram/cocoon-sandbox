@@ -15,6 +15,8 @@ use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
 };
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows_sys::Win32::System::Threading::NORMAL_PRIORITY_CLASS;
 
 type PSID = *mut std::ffi::c_void;
 use windows_sys::Win32::System::JobObjects::{
@@ -25,12 +27,25 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
     JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
-    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
-    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-    JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PRIORITY_CLASS,
+    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
+    JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS,
+    JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
+    JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
+
+/// Query the host physical memory in Megabytes.
+pub fn get_host_physical_memory_mb() -> Option<usize> {
+    unsafe {
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            Some((status.ullTotalPhys / (1024 * 1024)) as usize)
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct WindowsJobObjectDriver;
@@ -54,10 +69,23 @@ impl WindowsJobObjectDriver {
             let mut limit_flags =
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
 
-            if let Some(mem_mb) = limits.memory_limit_mb {
-                limit_flags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
-                info.JobMemoryLimit = mem_mb * 1024 * 1024;
-            }
+            // Auto-detect host physical memory to enforce a strict 95% safety ceiling.
+            // This prevents guest code from paging thrashing or blue-screening the host.
+            let host_phys_mb = get_host_physical_memory_mb().unwrap_or(4096);
+            let max_safe_mem_mb = (host_phys_mb * 95) / 100;
+
+            let effective_mem_mb = match limits.memory_limit_mb {
+                Some(requested_mb) => requested_mb.min(max_safe_mem_mb),
+                None => max_safe_mem_mb,
+            };
+
+            limit_flags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+            info.JobMemoryLimit = effective_mem_mb * 1024 * 1024;
+
+            // Lock process priority to NORMAL_PRIORITY_CLASS to prevent child processes from elevating
+            // to REALTIME_PRIORITY_CLASS or HIGH_PRIORITY_CLASS and starving the host OS scheduler.
+            limit_flags |= JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+            info.BasicLimitInformation.PriorityClass = NORMAL_PRIORITY_CLASS;
 
             // Enforce active process limit (mitigates fork bombs and handle exhaustion)
             if let Some(max_procs) = limits.max_processes {
@@ -81,26 +109,25 @@ impl WindowsJobObjectDriver {
                 ));
             }
 
-            // Enforce CPU rate limiting if specified
-            if let Some(cpu_pct) = limits.cpu_limit_pct {
-                let mut cpu_info: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = std::mem::zeroed();
-                cpu_info.ControlFlags =
-                    JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
-                cpu_info.Anonymous.CpuRate = (cpu_pct.clamp(1, 100)) * 100;
+            // Enforce CPU rate limiting (capped at 95% MAX of hardware to guarantee host OS responsiveness)
+            let cpu_pct = limits.cpu_limit_pct.unwrap_or(95).clamp(1, 95);
+            let mut cpu_info: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = std::mem::zeroed();
+            cpu_info.ControlFlags =
+                JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+            cpu_info.Anonymous.CpuRate = (cpu_pct as u32) * 100;
 
-                let res_cpu = SetInformationJobObject(
-                    job,
-                    JobObjectCpuRateControlInformation,
-                    &cpu_info as *const _ as *const _,
-                    std::mem::size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
-                );
+            let res_cpu = SetInformationJobObject(
+                job,
+                JobObjectCpuRateControlInformation,
+                &cpu_info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+            );
 
-                if res_cpu == 0 {
-                    CloseHandle(job);
-                    return Err(CocoonError::Platform(
-                        "Failed to apply Windows Job Object CPU rate limits".into(),
-                    ));
-                }
+            if res_cpu == 0 {
+                CloseHandle(job);
+                return Err(CocoonError::Platform(
+                    "Failed to apply Windows Job Object CPU rate limits".into(),
+                ));
             }
 
             // Enforce UI, Clipboard, and Desktop restrictions (prevents clipboard theft, shatter attacks, desktop injection)
@@ -237,6 +264,26 @@ impl SandboxDriver for WindowsJobObjectDriver {
             cmd.env("ALL_PROXY", "socks5://127.0.0.1:0");
             cmd.env("no_proxy", "");
         }
+
+        // Enforce GPU isolation or safety guards
+        if !config.limits.allow_gpu {
+            // Completely detach GPU hardware drivers and runtimes from child process
+            cmd.env("CUDA_VISIBLE_DEVICES", "");
+            cmd.env("ROCR_VISIBLE_DEVICES", "");
+            cmd.env("HIP_VISIBLE_DEVICES", "");
+            cmd.env("OPENCL_DEVICE_NAME", "");
+            cmd.env("GPU_DEVICE_ORDINAL", "");
+            cmd.env("NVIDIA_VISIBLE_DEVICES", "void");
+            cmd.env("ONEAPI_DEVICE_SELECTOR", "none");
+            cmd.env("SYCL_DEVICE_FILTER", "none");
+        } else {
+            // Apply PyTorch VRAM allocator fragmentation guard to prevent rapid out-of-control memory spikes
+            cmd.env("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128");
+        }
+
+        // Suppress JIT debugger attachments and crash dialog popups (prevents hangs and storage flooding)
+        cmd.env("COMPlus_DbgJitDebugLaunchSetting", "0");
+        cmd.env("DOTNET_DbgJitDebugLaunchSetting", "0");
 
         // Apply VFS cache redirects (prevents modifying read-only folders for bytecode, temp, etc.)
         for (k, v) in safe_env {

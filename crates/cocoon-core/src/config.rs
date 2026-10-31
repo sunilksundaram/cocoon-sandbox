@@ -68,6 +68,8 @@ pub struct ResourceLimits {
     pub max_output_bytes: Option<usize>,
     /// Maximum disk space (in MB) allowed for files created in scratchpad/workspace (defaults to 512MB)
     pub disk_limit_mb: Option<usize>,
+    /// Whether GPU hardware access is permitted (defaults to true; false masks GPU drivers)
+    pub allow_gpu: bool,
 }
 
 impl Default for ResourceLimits {
@@ -75,11 +77,12 @@ impl Default for ResourceLimits {
         Self {
             timeout: Some(Duration::from_secs(30)),
             memory_limit_mb: None,
-            cpu_limit_pct: None,
+            cpu_limit_pct: Some(95),
             allow_network: false,
             max_processes: Some(32),
             max_output_bytes: Some(10 * 1024 * 1024),
             disk_limit_mb: Some(512),
+            allow_gpu: true,
         }
     }
 }

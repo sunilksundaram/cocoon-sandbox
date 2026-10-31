@@ -176,6 +176,23 @@ print(f'Transcription complete: {len(res[\"text\"])} characters.')
 " --json
 ```
 
+#### Pattern I: Local SLM Inference & Fine-Tuning (GPU vs. CPU)
+Run local Small Language Models (SLMs) such as Phi-3, Llama-3-8B, or Mistral-7B, or train LoRA adapters with mathematical host protection:
+```bash
+# 1. GPU-accelerated SLM inference with automatic VRAM fragmentation protection:
+cocoon run --ro ./models --work ./output --timeout 180 --disk 4096 -r python-skill -c "
+from transformers import AutoModelForCausalLM, AutoTokenizer
+model = AutoModelForCausalLM.from_pretrained('models/Phi-3-mini', device_map='auto')
+print('SLM loaded successfully onto GPU.')
+" --json
+
+# 2. Run strictly on CPU with complete GPU hardware detachment:
+cocoon run --no-gpu --ro ./models --work ./output --timeout 180 -r python-skill -c "
+import torch
+print('CUDA Available:', torch.cuda.is_available()) # False
+" --json
+```
+
 ---
 
 ### ⚠️ Essential Tips for Heavy Workloads
@@ -189,8 +206,10 @@ print(f'Transcription complete: {len(res[\"text\"])} characters.')
 3. **Tuning Limits for Heavy Workloads:**
    - **Timeout:** Default is `30s`. Increase via `--timeout 180` (3 mins) or `--timeout 600` (10 mins).
    - **Disk Quota:** Default is `512MB`. Increase via `--disk 2048` (2 GB) or `--disk 10240` (10 GB).
-   - **Memory (RAM):** Default is unconstrained (uses host RAM). Set `--mem <MB>` only if you want a hard ceiling.
-   - **Runtime:** Always use `-r python-skill` (not `-r python`) for scripts importing `pandas`, `openpyxl`, `docx`, `pdfplumber`, or `torch`.
+   - **Memory (RAM):** Auto-detected from host physical RAM and hard-capped at **95% MAX**. Set `--mem <MB>` if you want an even lower limit.
+   - **CPU:** Automatically clamped to **95% MAX of physical CPU capacity** to prevent host OS starvation. Override with `--cpu <PCT>`.
+   - **GPU Isolation:** By default, GPU is permitted with automatic PyTorch VRAM allocator fragmentation guard (`PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"`). Pass `--no-gpu` to completely mask and detach all GPU hardware drivers.
+   - **Runtime:** Always use `-r python-skill` (not `-r python`) for scripts importing `pandas`, `openpyxl`, `docx`, `pdfplumber`, `transformers`, or `torch`.
 
 ---
 
@@ -269,5 +288,17 @@ Supported presets: `python`, `python-skill`, `node`, `bun`, `deno`, `go`, `java`
 7. **Universal Breakout Verification:**
    * Post-run canonicalization scans detect and reject any symlink, NTFS junction (`0x400`), or hardlink attempting to point outside the workspace root.
 
-8. **Verify Telemetry in `--json`:**
-   * Always verify `result.exit_code === 0` and `result.timed_out === false` before consuming `result.stdout`. Check `result.termination_reason` if execution fails.
+8. **Hardware-Aware 95% Ceiling:**
+   * Automatically inspects host physical RAM (`GlobalMemoryStatusEx` on Windows, `sysconf` on Linux) and caps memory usage to **95% of physical hardware**, guaranteeing that the host OS never enters paging thrash or crashes.
+
+9. **Scheduler Lockout & Priority Elevation Hardening:**
+   * Process priority is locked to `NORMAL_PRIORITY_CLASS` on Windows and real-time priorities are blocked (`RLIMIT_RTPRIO=0`) on Linux, preventing guest code from starving the host OS scheduler or system drivers. CPU is hard-capped at 95% MAX.
+
+10. **GPU Detachment & VRAM Safety (`--no-gpu`):**
+    * When `--no-gpu` is passed, all GPU driver interfaces (NVIDIA CUDA, AMD ROCm/HIP, Intel, OpenCL) are detached. When enabled, automatic VRAM allocator fragmentation guards are injected.
+
+11. **Core Dump Suppression:**
+    * Injects `RLIMIT_CORE=0` on Linux and suppresses WER popups on Windows to prevent multi-gigabyte core dumps and credential/prompt leaks.
+
+12. **Verify Telemetry in `--json`:**
+    * Always verify `result.exit_code === 0` and `result.timed_out === false` before consuming `result.stdout`. Check `result.termination_reason` if execution fails.
