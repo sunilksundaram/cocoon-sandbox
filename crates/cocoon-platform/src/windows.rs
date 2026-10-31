@@ -29,7 +29,8 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PRIORITY_CLASS,
-    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_UILIMIT_DESKTOP,
+    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
     JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
     JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
@@ -79,8 +80,10 @@ impl WindowsJobObjectDriver {
                 None => max_safe_mem_mb,
             };
 
-            limit_flags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
-            info.JobMemoryLimit = effective_mem_mb * 1024 * 1024;
+            limit_flags |= JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+            let mem_bytes = effective_mem_mb * 1024 * 1024;
+            info.JobMemoryLimit = mem_bytes;
+            info.ProcessMemoryLimit = mem_bytes;
 
             // Lock process priority to NORMAL_PRIORITY_CLASS to prevent child processes from elevating
             // to REALTIME_PRIORITY_CLASS or HIGH_PRIORITY_CLASS and starving the host OS scheduler.

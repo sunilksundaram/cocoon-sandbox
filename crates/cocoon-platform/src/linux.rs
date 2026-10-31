@@ -301,11 +301,11 @@ impl SandboxDriver for LinuxNamespaceDriver {
                         #[cfg(unix)]
                         {
                             use std::os::unix::process::ExitStatusExt;
-                            if status.signal() == Some(9) || exit_code == 137 {
-                                if config.limits.memory_limit_mb.is_some() {
-                                    oom_killed = true;
-                                    termination_reason = Some(TerminationReason::MemoryExceeded);
-                                }
+                            if (status.signal() == Some(9) || exit_code == 137)
+                                && config.limits.memory_limit_mb.is_some()
+                            {
+                                oom_killed = true;
+                                termination_reason = Some(TerminationReason::MemoryExceeded);
                             }
                         }
                         break;
@@ -340,11 +340,11 @@ impl SandboxDriver for LinuxNamespaceDriver {
                     #[cfg(unix)]
                     {
                         use std::os::unix::process::ExitStatusExt;
-                        if status.signal() == Some(9) || exit_code == 137 {
-                            if config.limits.memory_limit_mb.is_some() {
-                                oom_killed = true;
-                                termination_reason = Some(TerminationReason::MemoryExceeded);
-                            }
+                        if (status.signal() == Some(9) || exit_code == 137)
+                            && config.limits.memory_limit_mb.is_some()
+                        {
+                            oom_killed = true;
+                            termination_reason = Some(TerminationReason::MemoryExceeded);
                         }
                     }
                 }
