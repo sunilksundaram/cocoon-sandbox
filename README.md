@@ -12,7 +12,7 @@
 
 Cocoon allows AI agents, code evaluation suites, and developers to safely run untrusted scripts in **Python, Node.js, Bun, Deno, Go, Java, Rust, PowerShell, Bash, Ruby, PHP, Lua, and any binary compiler** without the latency or complexity of heavyweight containers or virtual machines.
 
-👉 **[Installation Guide & Prerequisites](docs/INSTALLATION.md)** | **[User & Agent Integration Guide](docs/USER_GUIDE.md)**
+👉 **[Installation Guide & Prerequisites](docs/INSTALLATION.md)** | **[User & Agent Integration Guide](docs/USER_GUIDE.md)** | **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)**
 
 ---
 

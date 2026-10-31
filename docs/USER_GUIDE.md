@@ -2,7 +2,7 @@
 
 > A complete guide for using Cocoon as a standalone sandbox, with major agent frameworks (Microsoft Agent Framework, LangChain, LangGraph, LlamaIndex), and agent harnesses (Claude Desktop, GitHub Copilot, Hermes, Cursor, Antigravity, and custom agent loops).
 
-👉 *Need setup or prerequisite instructions? See the [Installation Guide](INSTALLATION.md).*
+👉 *Need setup or prerequisite instructions? See the [Installation Guide](INSTALLATION.md) and the [Security & Vulnerability Remediation Guide](SECURITY_AND_VULNERABILITIES.md).*
 
 ---
 
