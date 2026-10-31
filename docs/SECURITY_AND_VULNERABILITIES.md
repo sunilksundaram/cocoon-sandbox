@@ -25,18 +25,19 @@ Cocoon employs a **two-tier defense-in-depth model** to neutralize these attacks
 
 ## 2. Vulnerability & Remediation Matrix
 
-| Threat / Attack Vector | Severity | Previous Behavior / Risk | Cocoon Production Mitigation |
+| Threat / Attack Vector | Severity | Platform Reality & Nuance | Cocoon Production Mitigation |
 | :--- | :---: | :--- | :--- |
-| **Outbound Sockets / Exfiltration** | **Critical** | Sockets allowed; credential files could be transmitted over HTTP | **Default-deny network** (`allow_network: false`). Sinks proxies to `127.0.0.1:0`; Linux unshares network namespace (`bwrap --unshare-all`). Opt-in via `--allow-network`. |
-| **Host Credential Harvesting** | **Critical** | Inherited parent `USERPROFILE`, `HOME`, `APPDATA`, `~/.ssh`, `~/.aws` | **Synthetic Dummy User Profile** created inside ephemeral scratchpad. `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` redirected to isolated empty folders. |
+| **Outbound Sockets / Exfiltration** | **Critical** | **Platform Difference:** Linux enforces kernel-level network namespace isolation (`CLONE_NEWNET`); Windows enforces **cooperative proxy sinkholing**. | **Linux:** `bwrap --unshare-all` severs all network interfaces and raw sockets.<br>**Windows:** Proxies (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) sink to `127.0.0.1:0`. Blocks standard HTTP/HTTPS clients (`requests`, `urllib`, `fetch`, `curl`, `pip`). *Notice:* Raw `socket.connect()` or proxy-ignoring clients on Windows can reach the network without external WFP/firewall rules. |
+| **Host Credential Harvesting** | **Critical** | **Ambient Filesystem Access on Windows:** Windows has no unprivileged mount namespaces. Scripts run with the ambient read permissions of the launching user outside `--ro` mounts. | Synthetic Dummy User Profile created in ephemeral scratchpad redirects `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` away from host secrets (`~/.aws`, `~/.ssh`). Host folders mounted with `--ro` receive NTFS Deny ACEs. |
 | **Named Pipe / IPC Hijacking** | **Critical** | Child could connect to `\\.\pipe\docker_engine` or `ssh-agent` | Explicitly strips `DOCKER_HOST`, `SSH_AUTH_SOCK`, `WSL_INTEROP`, and cloud tokens even if `inherit_env` is requested. |
 | **Desktop Clipboard Theft** | **High** | Script could read clipboard via `GetClipboardData` / PowerShell | Enforces Win32 Job Object UI Restrictions: `JOB_OBJECT_UILIMIT_READCLIPBOARD` & `WRITECLIPBOARD`. |
 | **Desktop / Window Hijacking** | **High** | Script could inject synthetic keystrokes or hook window handles | Enforces `JOB_OBJECT_UILIMIT_HANDLES`, `GLOBALATOMS`, `SYSTEMPARAMETERS`, and `DESKTOP`. |
 | **Fork Bombs & Handle Exhaustion** | **High** | Unlimited processes could exhaust the OS PID table | Hard active process limit (`max_processes: 32` default) enforced via Windows Job Object and Linux `RLIMIT_NPROC`. |
 | **CPU Starvation / Infinite Loops** | **High** | Tight loops consumed 100% host CPU | Hard execution timeout (30s default) with atomic tree termination (`TerminateJobObject` / `kill`), plus CPU rate throttling. |
-| **Storage / Disk Bomb DoS** | **High** | Script could fill host disk by writing massive files | Hard disk write quota (`disk_limit_mb: 512MB` default) verified post-run and bounded via Linux `RLIMIT_FSIZE`. |
+| **Storage / Disk Bomb DoS** | **High** | **Teardown Check on Windows:** Disk writes hit disk during execution and are verified upon process exit. | Linux enforces hard kernel cap via `RLIMIT_FSIZE`. Windows verifies total scratchpad disk quota (`disk_limit_mb: 512MB` default) upon process exit, aborting before artifacts are accepted. |
 | **Stdout Buffer Memory Exhaustion** | **High** | Infinite print loop (`while true: print("A")`) exhausted agent RAM | Bounded 10 MB streaming buffers with chunked readers and truncation flags (`stdout_truncated` / `stderr_truncated`). |
-| **Junction & Symlink Breakouts** | **High** | Child could create NTFS junction pointing to `C:\` or `/etc` | Universal post-execution canonicalization check (`verify_no_breakouts`) rejects any path escaping the workspace root with `SecurityViolation`. |
+| **Junction & Symlink Breakouts** | **High** | **Teardown Scan on Windows:** Junctions are created in-flight and detected upon exit. | Universal post-execution canonicalization check (`verify_no_breakouts`) scans the workspace upon exit, rejecting any escape pointing outside the workspace root with `SecurityViolation`. |
+| **Workspace Permission Leakage** | **High** | Granting overly broad ACLs (`Everyone`) exposes workspace to other users | Workspace permissions maintain standard user inheritance. If nested inside a `--ro` mount, inheritance is broken and Full Control is granted strictly to the current user (`%USERNAME%`), NEVER `Everyone` (`*S-1-1-0`). |
 | **DLL Preloading (CWD Hijacking)**| **Medium** | Windows loader searched workspace for DLLs before System32 | Injects `CWDIllegalInDllSearch=0x2` to disallow loading DLLs from current working directory. |
 | **Linux Shared Memory Leakage** | **Medium** | Child process could access host `/dev/shm` IPC segments | Explicitly mounts a fresh, isolated `--tmpfs /dev/shm` per run in bubblewrap. |
 | **Python Dependency Poisoning** | **Medium** | Scripts loaded host `site-packages` or wrote `.pyc` files | Default Python preset runs with `-I -S -B`. Dedicated `python-skill` preset provided for trusted document skills. |
@@ -97,6 +98,28 @@ In addition, Linux process limits are enforced at the syscall level via `libc::s
 - `RLIMIT_AS`: Virtual address space memory limit.
 - `RLIMIT_NPROC`: Max process count limit.
 - `RLIMIT_FSIZE`: File size output quota.
+
+### 3.3 Windows Security Boundaries & Platform Realities
+
+Developers deploying Cocoon on bare-metal Windows must understand the fundamental architectural distinctions between Windows and Linux unprivileged isolation:
+
+1. **Network Isolation: Cooperative Proxy Sinking vs. Kernel Namespaces**
+   - **Linux:** Bubblewrap uses kernel user and network namespaces (`CLONE_NEWNET`). In this mode, no raw sockets, TCP packets, or UDP datagrams can reach external interfaces without explicit veth pairing.
+   - **Windows:** Windows Job Objects do not provide network namespace virtualization. Cocoon enforces network isolation by nullifying standard proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` pointing to `http://127.0.0.1:0`) and injecting offline flags into language runtimes.
+   - **The Reality:** Cooperative HTTP/HTTPS clients (such as Python `urllib`/`requests`, Node `fetch`, `npm`, `pip`, `curl`) fail to connect. However, **raw TCP sockets** (e.g. `socket.socket().connect(...)`) or clients explicitly ignoring proxy environment variables can still reach the network.
+   - **Production Requirement:** If raw socket severance on Windows is required, Cocoon should be run inside a Linux container (Docker/WSL2) or behind host-level Windows Filtering Platform (WFP) / firewall rules.
+
+2. **Filesystem Isolation: Explicit NTFS Deny ACEs vs. Mount Namespaces**
+   - **Linux:** Bubblewrap constructs a pristine mount namespace where `/` is a read-only or tmpfs mount, and only explicitly requested folders are bind-mounted. Unmounted host paths (such as `/home/user/.ssh`) literally do not exist inside the namespace.
+   - **Windows:** Windows has no native unprivileged mount namespace primitive. Cocoon implements read-only protection by injecting NTFS Deny ACEs (`DE,DC,WD,AD` - Delete, Delete Child, Write Data, Append Data) onto the specific paths passed to `--ro`.
+   - **The Reality:** Deny ACEs protect the designated folders against writes and deletes, but do *not* deny read access. Crucially, ambient host directories outside `--ro` and `--work` (e.g., `C:\Users\<user>\...`) remain accessible for reading under the launching user's Windows access token. To mitigate credential theft, Cocoon synthesizes an isolated dummy user profile (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`) pointing into the ephemeral scratchpad.
+
+3. **In-Flight Execution vs. Teardown Checks (Junctions & Quotas)**
+   - On Windows, directory junction scans (`verify_no_breakouts`) and total scratchpad disk quota verifications (`verify_disk_quota`) execute **post-run upon process exit**.
+   - If an untrusted script creates an NTFS junction or writes hundreds of megabytes during its execution slice, those operations physically occur on the host disk before Cocoon detects the violation upon exit and halts artifact propagation.
+
+4. **Workspace Permissions Hardening**
+   - Unlike legacy approaches that granted wide-open permissions (`Everyone` / `*S-1-1-0`), Cocoon strictly preserves standard inherited user permissions. If the workspace is nested inside a `--ro` mount, inheritance is broken and Full Control is granted strictly to the current executing user (`%USERNAME%`), with explicit revocation upon process teardown.
 
 ---
 
@@ -324,5 +347,67 @@ When AI agents run heavy computational workloads—such as local Small Language 
 - **Cocoon Mitigation**:
   - Linux: In `pre_exec`, Cocoon applies `setrlimit(RLIMIT_CORE, 0)`. Core dump generation is completely disabled.
   - Windows: Configured with `JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION`, and suppresses debugger attachment dialogs (`COMPlus_DbgJitDebugLaunchSetting=0`, `DOTNET_DbgJitDebugLaunchSetting=0`).
+
+---
+
+## 10. Chassis Architecture vs. Model Agency: Never Let the Agent Pick Its Own Sandbox Flags
+
+A critical design rule for building secure AI agent platforms is **separation of policy from model agency**:
+
+> [!CAUTION]
+> **Never expose sandbox execution flags (`--allow-network`, `-r python-skill`, `--no-gpu`, `--work`, `--ro`) as arguments in the tool schema exposed to the LLM.**
+
+If an LLM or agent tool-calling schema allows the model to pass sandbox flags:
+1. A prompt injection (e.g., hidden in a retrieved document, email, or database record) can instruct the LLM to call `execute_code(code=..., allow_network=True)`.
+2. The model could intentionally switch from `-r python` (which runs in isolated standard library mode `-I -S -B`) to `-r python-skill`, bypassing hermetic standard-library isolation.
+3. The model could point `--work` to arbitrary host paths outside the session.
+
+### Recommended Chassis Pattern
+
+The outer agent chassis / tool harness (written in Python, TypeScript, Go, etc.) must hardcode the sandbox boundaries based on deterministic application policy:
+
+| Workload Type | Preset Selected by Chassis | Network Flag | Mount Policy |
+| :--- | :--- | :--- | :--- |
+| **Untrusted Model-Generated Code** | `-r python` (isolated `-I -S -B`) | Default-Deny (No `--allow-network`) | `--ro <repo>` (Read-only worktree) |
+| **Document Skills (Excel, Word, PDF)** | `-r python-skill` | Default-Deny (No `--allow-network`) | `--ro <input_dir> --work <session_worktree>` |
+| **Web Scraping / API Tools** | Dedicated scraper tool | `--allow-network` hardcoded by host | Ephemeral workspace only |
+
+The tool definition exposed to the LLM should look strictly like this:
+```json
+{
+  "name": "run_python_code",
+  "description": "Executes Python code in an isolated sandbox. Only standard library is available.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "description": "The Python source code to execute."
+      }
+    },
+    "required": ["code"]
+  }
+}
+```
+
+The chassis tool implementation constructs the command deterministically:
+```python
+def handle_run_python_code(code: str, session_id: str) -> dict:
+    # All security flags are picked by the CHASSIS, NOT the MODEL
+    cmd = [
+        "cocoon", "run",
+        "--runtime", "python",
+        "--ro", get_session_worktree(session_id),
+        "--work", get_session_output_dir(session_id),
+        "--timeout", "30",
+        "--mem", "512",
+        "--disk", "256",
+        "--json",
+        "-c", code
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    return json.loads(res.stdout)
+```
+
 
 

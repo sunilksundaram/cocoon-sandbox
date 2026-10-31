@@ -550,3 +550,14 @@ impl Drop for AppContainerProfile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_container_profile_creation() {
+        let profile = AppContainerProfile::create("CocoonTestAppContainerProfile");
+        assert!(profile.is_ok(), "Failed: {:?}", profile.err());
+    }
+}

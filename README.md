@@ -19,12 +19,13 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 ## ⚡ Features
 
 * **Sub-Millisecond Startup:** Runs directly on native operating system primitives (< 5ms) instead of spinning up virtual machines.
-* **Default-Deny Network:** Outbound TCP/UDP sockets are completely blocked by default (`allow_network: false`) to eliminate credential exfiltration. Use `--allow-network` to opt in.
-* **Ironclad Read-Only Protection:** Mount host directories with `--ro` where writes, overwrites, appends, and deletes are physically blocked by kernel ACLs / namespaces.
+* **Default-Deny Network:** Outbound network is disabled by default (`allow_network: false`). Linux unshares network namespaces (`CLONE_NEWNET`) for kernel-level socket severance; Windows sinks proxies (`127.0.0.1:0`) to block cooperative HTTP/HTTPS clients and package tools. Use `--allow-network` to opt in.
+* **Read-Only Host Mounts:** Mount host directories with `--ro` where writes, overwrites, appends, and deletes are physically blocked by kernel mount namespaces on Linux and NTFS Deny ACEs on Windows.
 * **Hermetic Runtimes & Dual-Mode Python:** Untrusted code runs in hermetic standard-library mode (`python -I -S -B`, `node --no-addons`, `ruby --disable-gems`), with a dedicated `python-skill` preset for document processing tools (`openpyxl`, `python-docx`, `pandas`).
 * **Desktop & Clipboard Isolation:** Win32 Job Object UI restrictions prevent child processes from reading the host clipboard, injecting synthetic keystrokes, or intercepting window handles.
 * **Resource & Process Caps:** Hard limits on active processes (`--max-procs 32`), disk write quotas (`--disk 512MB`), memory (`--mem`), and execution timeouts (`--timeout 30s`).
-* **Ephemeral Virtual Scratchpad & Isolated User Profile:** Redirects caches (`__pycache__`, npm, cargo) and synthesizes a clean, isolated dummy user profile (`USERPROFILE`, `HOME`, `APPDATA`).
+* **Ephemeral Virtual Scratchpad & User Profile:** Redirects caches (`__pycache__`, npm, cargo) and synthesizes a clean, isolated dummy user profile (`USERPROFILE`, `HOME`, `APPDATA`).
+* **Workspace DACL Hardening:** Workspace permissions are strictly bounded to the executing user (`%USERNAME%`), never `Everyone` (`*S-1-1-0`).
 * **Universal Breakout Verification:** Recursively scans workspace post-run to detect and reject symlinks, NTFS directory junctions (`0x400`), or hardlinks escaping the workspace root.
 * **Universal Command Execution:** Run any installed compiler or binary toolchain (`gcc`, `clang`, `dotnet`, `zig`, `julia`, etc.) by passing trailing arguments: `cocoon run -- <cmd> [args...]`.
 * **High-Throughput Heavy Data & Multimedia:** Native NVMe read speeds (3–7 GB/s) with zero virtualization overhead for multi-gigabyte Excel data (Pandas/Polars), multi-hundred page PDF conversions, and video/audio processing (`ffmpeg`).

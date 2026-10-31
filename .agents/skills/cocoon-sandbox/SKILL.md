@@ -265,25 +265,27 @@ Supported presets: `python`, `python-skill`, `node`, `bun`, `deno`, `go`, `java`
 ## 🔒 Built-in Sandbox Invariants (Enforced by Default)
 
 1. **Default-Deny Network (`allow_network: false`):**
-   * Sockets and outbound TCP/UDP are blocked by default to eliminate credential exfiltration. Only enabled if `--allow-network` is explicitly set.
+   * **Linux:** Bubblewrap severs all network namespaces (`CLONE_NEWNET`). Outbound TCP/UDP sockets fail with `Network is unreachable`.
+   * **Windows:** Standard proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) sink to `127.0.0.1:0`. Cooperative HTTP clients (`requests`, `urllib`, `fetch`, `curl`, `pip`) fail immediately. *Note:* Raw `socket.connect()` calls that bypass proxy settings are not blocked on bare-metal Windows; use Docker/WSL2 or firewall rules if strict socket severance is required.
 
 2. **Read-Only by Default (`--ro .`):**
    * The current working directory is automatically mounted as **strictly read-only** by default.
-   * Any attempt by scripts or code to write, append, or delete host files is physically blocked at the OS kernel level (`PermissionError: Permission denied`).
+   * On Linux, mount namespaces enforce read-only status. On Windows, NTFS Deny ACEs block write/append/delete operations on designated folders (`PermissionError: Permission denied`). Ambient host paths outside `--ro` retain standard user read access.
 
-3. **Zero Host Writes (Strict Workdir Isolation):**
+3. **Zero Host Writes & Workspace Access Control:**
    * Code can **never** get write access to anything other than the designated `--work` folder (or the auto-cleaned ephemeral scratchpad).
-   * To edit, refactor, or test modifications on existing code, use `--copy <path>` to stage a copy into the work folder and manipulate it there safely.
+   * Workspace DACLs are strictly bounded to the executing user (`%USERNAME%`), never `Everyone` (`*S-1-1-0`).
+   * To edit or refactor existing code, use `--copy <path>` to stage a copy into the work folder and manipulate it there safely.
 
 4. **Desktop & Clipboard Isolation:**
    * Win32 Job Object UI restrictions prevent child processes from accessing the user clipboard (`GetClipboardData`), injecting synthetic keystrokes, or intercepting window handles.
 
 5. **30-Second Execution Timeout by Default:**
-   * Every execution is automatically capped at **30 seconds** by default (override with `--timeout <secs>`). Infinite loops or hangs will auto-terminate without freezing the agent.
+   * Every execution is automatically capped at **30 seconds** by default (override with `--timeout <secs>`). Infinite loops or hangs auto-terminate without freezing the agent.
 
 6. **Process & Storage Caps:**
    * Active processes capped at 32 (`--max-procs 32`) to prevent fork bombs.
-   * Disk write quota capped at 512 MB (`--disk 512`) to prevent disk exhaustion.
+   * Disk write quota capped at 512 MB (`--disk 512`) to prevent disk exhaustion (enforced in-flight via `RLIMIT_FSIZE` on Linux and verified on teardown on Windows).
 
 7. **Universal Breakout Verification:**
    * Post-run canonicalization scans detect and reject any symlink, NTFS junction (`0x400`), or hardlink attempting to point outside the workspace root.
@@ -300,5 +302,8 @@ Supported presets: `python`, `python-skill`, `node`, `bun`, `deno`, `go`, `java`
 11. **Core Dump Suppression:**
     * Injects `RLIMIT_CORE=0` on Linux and suppresses WER popups on Windows to prevent multi-gigabyte core dumps and credential/prompt leaks.
 
-12. **Verify Telemetry in `--json`:**
+12. **Chassis Policy vs. Model Agency:**
+    * The host chassis, not the LLM, must choose the execution flags (`--allow-network`, `-r python-skill`, `--work`). The agent tool schema should only accept `code: string`.
+
+13. **Verify Telemetry in `--json`:**
     * Always verify `result.exit_code === 0` and `result.timed_out === false` before consuming `result.stdout`. Check `result.termination_reason` if execution fails.

@@ -36,6 +36,19 @@ impl Drop for ReadOnlyGuard {
             }
 
             if let Some(ref ws) = self.workspace_dir {
+                // Remove explicit user grant if one was applied
+                if let Ok(username) = std::env::var("USERNAME") {
+                    if !username.is_empty() {
+                        let _ = std::process::Command::new("icacls")
+                            .arg(ws)
+                            .arg("/remove")
+                            .arg(&username)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+                    }
+                }
+
                 // Restore inherited permissions on workspace directory
                 let _ = std::process::Command::new("icacls")
                     .arg(ws)
@@ -123,42 +136,59 @@ impl VirtualView {
                 }
             }
 
-            // Ensure the designated workspace folder maintains write permissions
+            // Ensure the designated workspace folder maintains write permissions.
+            // If the workspace is inside a locked read-only mount, strip inheritance
+            // to shield it from the parent Deny ACE, and grant Full Control strictly
+            // to the CURRENT USER (never Everyone / *S-1-1-0).
             let ws = self.scratchpad.workspace();
-            let status_inh = std::process::Command::new("icacls")
-                .arg(ws)
-                .arg("/inheritance:r")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(CocoonError::Io)?;
+            let is_inside_locked = locked.iter().any(|locked_dir| ws.starts_with(locked_dir));
 
-            if !status_inh.success() {
-                return Err(CocoonError::SecurityViolation(format!(
-                    "Failed to reset inheritance on workspace: {:?}",
-                    ws
-                )));
-            }
+            let workspace_to_restore = if is_inside_locked {
+                let username = std::env::var("USERNAME").unwrap_or_default();
+                if !username.is_empty() {
+                    let status_inh = std::process::Command::new("icacls")
+                        .arg(ws)
+                        .arg("/inheritance:r")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map_err(CocoonError::Io)?;
 
-            let status_grant = std::process::Command::new("icacls")
-                .arg(ws)
-                .arg("/grant")
-                .arg("*S-1-1-0:(OI)(CI)F")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(CocoonError::Io)?;
+                    if !status_inh.success() {
+                        return Err(CocoonError::SecurityViolation(format!(
+                            "Failed to reset inheritance on workspace: {:?}",
+                            ws
+                        )));
+                    }
 
-            if !status_grant.success() {
-                return Err(CocoonError::SecurityViolation(format!(
-                    "Failed to grant permissions on workspace: {:?}",
-                    ws
-                )));
-            }
+                    let grant_target = format!("{}:(OI)(CI)F", username);
+                    let status_grant = std::process::Command::new("icacls")
+                        .arg(ws)
+                        .arg("/grant")
+                        .arg(&grant_target)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map_err(CocoonError::Io)?;
+
+                    if !status_grant.success() {
+                        return Err(CocoonError::SecurityViolation(format!(
+                            "Failed to grant permissions on workspace: {:?}",
+                            ws
+                        )));
+                    }
+                    Some(ws.to_path_buf())
+                } else {
+                    None
+                }
+            } else {
+                // Workspace is outside locked mounts; ambient user permissions are already intact.
+                None
+            };
 
             Ok(ReadOnlyGuard {
                 locked_directories: locked,
-                workspace_dir: Some(ws.to_path_buf()),
+                workspace_dir: workspace_to_restore,
             })
         }
 
@@ -340,5 +370,30 @@ impl VirtualView {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lock_read_only_lifecycle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ro_dir = temp.path().join("ro_dir");
+        std::fs::create_dir_all(&ro_dir).expect("create ro_dir");
+
+        let mounts = vec![MountRule {
+            host_path: ro_dir.clone(),
+            guest_path: Some(PathBuf::from("/ro")),
+            mount_type: MountType::ReadOnly,
+        }];
+
+        let vv = VirtualView::setup(&mounts, None, None, &[]).expect("VirtualView setup");
+        assert!(vv.is_read_only(&ro_dir));
+
+        let guard = vv.lock_read_only();
+        assert!(guard.is_ok(), "Failed to lock: {:?}", guard.err());
+        drop(guard);
     }
 }
