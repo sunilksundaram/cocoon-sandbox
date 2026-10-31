@@ -83,7 +83,8 @@ impl RuntimePreset {
                     args.push(file.to_string_lossy().to_string());
                 } else {
                     return Err(CocoonError::Config(
-                        "PythonSkill runtime requires either inline code (-c) or a script file".into(),
+                        "PythonSkill runtime requires either inline code (-c) or a script file"
+                            .into(),
                     ));
                 }
                 Ok((exe, args))

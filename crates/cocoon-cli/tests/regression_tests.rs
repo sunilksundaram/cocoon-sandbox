@@ -126,9 +126,8 @@ fn regression_mount_rule_immutability() {
 #[test]
 fn regression_rust_preset_offline() {
     // Invariant: Rust/Cargo preset must always enforce --offline for dependency isolation
-    let (_, args) =
-        RuntimePreset::configure(RuntimeKind::Rust, Some("fn main() {}"), None)
-            .expect("Rust configure should succeed");
+    let (_, args) = RuntimePreset::configure(RuntimeKind::Rust, Some("fn main() {}"), None)
+        .expect("Rust configure should succeed");
 
     assert!(
         args.contains(&"--offline".to_string()),
@@ -139,9 +138,8 @@ fn regression_rust_preset_offline() {
 #[test]
 fn regression_go_preset_offline() {
     // Invariant: Go preset must always enforce -mod=readonly for dependency isolation
-    let (_, args) =
-        RuntimePreset::configure(RuntimeKind::Go, None, Some(Path::new("main.go")))
-            .expect("Go configure should succeed");
+    let (_, args) = RuntimePreset::configure(RuntimeKind::Go, None, Some(Path::new("main.go")))
+        .expect("Go configure should succeed");
 
     assert!(
         args.contains(&"-mod=readonly".to_string()),
@@ -184,11 +182,9 @@ fn regression_memory_cap_enforces_95_percent_ceiling() {
     let max_safe = (host_mb * 95) / 100;
     assert_eq!(max_safe, 15564);
 
-    let requested_over_limit = Some(32768); // User requested 32GB
-    let effective = requested_over_limit.unwrap_or(max_safe).min(max_safe);
-    assert_eq!(effective, 15564);
+    let calc_effective = |requested: Option<usize>| requested.unwrap_or(max_safe).min(max_safe);
 
-    let requested_under_limit = Some(4096); // User requested 4GB
-    let effective_under = requested_under_limit.unwrap_or(max_safe).min(max_safe);
-    assert_eq!(effective_under, 4096);
+    assert_eq!(calc_effective(Some(32768)), 15564);
+    assert_eq!(calc_effective(Some(4096)), 4096);
+    assert_eq!(calc_effective(None), 15564);
 }

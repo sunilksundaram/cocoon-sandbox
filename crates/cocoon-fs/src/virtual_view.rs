@@ -284,7 +284,10 @@ impl VirtualView {
                 .unwrap_or_else(|| "C:".into()),
         );
         envs.insert("HOMEPATH".into(), dummy_user_str.clone());
-        envs.insert("APPDATA".into(), dummy_roaming.to_string_lossy().to_string());
+        envs.insert(
+            "APPDATA".into(),
+            dummy_roaming.to_string_lossy().to_string(),
+        );
         envs.insert(
             "LOCALAPPDATA".into(),
             dummy_local.to_string_lossy().to_string(),
