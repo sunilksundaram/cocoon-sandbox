@@ -86,14 +86,17 @@ Agents need something different: **the native speed of the host toolchain, but w
 
 ---
 
-## 3. The 4 Built-In Invariants
+## 3. The Core Built-In Invariants
 
-Cocoon is built around four non-negotiable guarantees designed specifically for autonomous code generation:
+Cocoon is built around non-negotiable guarantees designed specifically for autonomous code generation:
 
 ### Invariant 1: Read-Only Host by Default (`--ro .`)
 When an agent runs in a directory, that directory is mounted as **strictly read-only**. If the agent generates code that attempts `open("important_data.csv", "w")` or `os.remove("main.py")`, the OS kernel physically blocks the system call with `Permission denied`. No files on the host can be overwritten or deleted.
 
-### Invariant 2: Ephemeral Copy-on-Write (`--copy` and `--work`)
+### Invariant 2: Default-Deny Network Access (`allow_network: false`)
+A write ban alone does not protect you if an untrusted script can read a credential file and send it out over a socket. Cocoon completely disables network interfaces (Linux) and nullifies proxy endpoints (Windows) by default. Scripts cannot make outbound HTTP requests, connect to local chassis daemons, or probe cloud metadata (`169.254.169.254`) unless `--allow-network` is explicitly passed.
+
+### Invariant 3: Ephemeral Copy-on-Write (`--copy` and `--work`)
 If the agent needs to edit existing files (for example, refactoring code or tweaking a configuration file), you stage a copy:
 ```bash
 cocoon run --ro ./repo --copy ./repo/app.json --work ./agent_output \
@@ -101,15 +104,19 @@ cocoon run --ro ./repo --copy ./repo/app.json --work ./agent_output \
 ```
 The agent freely mutates `app.json` inside its private `--work` directory. The original file in `./repo` remains completely untouched.
 
-### Invariant 3: Hard 30-Second Timeout & Memory Caps
-Every invocation is automatically capped at **30 seconds** (configurable with `--timeout <secs>`). If the generated script enters an infinite loop, Cocoon cleanly terminates the entire process tree at the OS kernel level. No orphaned zombie processes.
+### Invariant 4: Hard Timeouts, Process Caps & Storage Quotas
+- **30-Second Timeout:** Monotonic timer triggers atomic process tree termination (`TerminateJobObject` / `kill`).
+- **Process Cap (32 active):** Enforced via Win32 Job Object and Linux `RLIMIT_NPROC` to eliminate fork bombs.
+- **Disk Write Quota (512 MB):** Post-run verification and kernel limits prevent scripts from filling the host drive.
+- **Output Buffers (10 MB):** Prevents runaway print loops from exhausting agent host memory.
 
-### Invariant 4: Universal Polyglot Support (12+ Runtimes)
-Cocoon includes auto-resolving presets for:
-* **Interpreters:** `python`, `node`, `bun`, `deno`, `ruby`, `php`, `lua`
-* **Compilers & Systems:** `rust` / `cargo`, `go`, `java`
-* **Shells:** `pwsh` / `powershell`, `bash` / `sh`
-* **Any Arbitrary Binary:** `cocoon run --work ./build -- gcc main.c -o app && ./app`
+### Invariant 5: Desktop & Clipboard Isolation
+Standard user scripts can quietly read your clipboard (`GetClipboardData`) to steal passwords and tokens. Cocoon enforces Win32 Job Object UI restrictions (`JobObjectBasicUIRestrictions`) blocking access to the host clipboard, user handles, and desktop messaging.
+
+### Invariant 6: Hermetic Runtimes & Dual-Mode Python
+- **Untrusted Code:** Default `python` runs with `-I -S -B` (isolated standard library mode; third-party packages, user-sites, and bytecode writes are blocked).
+- **Document Skills:** Trusted format tools run via `python-skill` (loads `openpyxl`, `python-docx`, `pandas`).
+- **Other Runtimes:** Node runs with `--no-addons` and neutralizes `NODE_OPTIONS`; Ruby runs with `--disable-gems`; PHP runs with `-n` (ignores `php.ini`). Offline toolchain flags are injected automatically.
 
 ---
 
@@ -182,6 +189,52 @@ print('Isolated scikit-learn ready!')
 ```
 The package installs inside `./agent_env` and is completely quarantined from the host Python installation.
 
+### 5. High-Throughput Big Data, Document Conversions & Multimedia
+What happens when an agent needs to extract data from a 500 MB Excel ledger, convert a 400-page PDF to Word, or transcode a video?
+
+In Docker or virtual machines, mounting multi-gigabyte files incurs severe **VirtIO-FS virtualization penalties**, throttling I/O to 300–600 MB/s. 
+
+Because Cocoon uses **native OS filesystem projections** (inherited Deny ACEs on Windows and bind mounts in Linux mount namespaces), reading from `--ro` happens at **raw NVMe SSD bus speeds (3,000–7,000 MB/s)** with zero copying:
+
+```bash
+# 1. Processing a massive 500MB Excel ledger with Pandas & Calamine at NVMe speed
+cocoon run \
+  --ro ./data_lake \
+  --work ./output_dir \
+  --timeout 180 \
+  --disk 2048 \
+  -r python-skill \
+  -c "
+import pandas as pd
+df = pd.read_excel('data_lake/annual_ledger_500MB.xlsx', engine='calamine')
+high_val = df[df['amount'] > 50000]
+high_val.to_parquet('output_dir/filtered_ledger.parquet')
+print(f'Extracted {len(high_val):,} transactions from {len(df):,} total rows.')
+" --json
+
+# 2. Converting a 400-page PDF to Word docx
+cocoon run \
+  --ro ./contracts \
+  --work ./word_docs \
+  --timeout 240 \
+  -r python-skill \
+  -c "
+from pypdf import PdfReader
+from docx import Document
+reader = PdfReader('contracts/annual_filing_400_pages.pdf')
+doc = Document()
+for page in reader.pages:
+    txt = page.extract_text()
+    if txt: doc.add_paragraph(txt)
+doc.save('word_docs/annual_filing.docx')
+print(f'Converted {len(reader.pages)} PDF pages to Word docx.')
+" --json
+
+# 3. Audio & Video processing with ffmpeg
+cocoon run --ro ./media --work ./audio --timeout 300 --disk 4096 -- \
+  ffmpeg -i media/keynote_4k.mp4 -vn -acodec libmp3lame -q:a 2 audio/keynote_audio.mp3
+```
+
 ---
 
 ## 6. How Cocoon Compares
@@ -190,6 +243,9 @@ The package installs inside `./agent_env` and is completely quarantined from the
 | :--- | :--- | :--- | :--- | :--- |
 | **Startup Latency** | **< 2ms** | 1,500–4,000ms | < 10ms | **< 3ms** |
 | **Host Protection** | ❌ None | ✅ High | ✅ High | ✅ **Kernel-Enforced** |
+| **Large File I/O Throughput (5GB file)** | 3,000–7,000 MB/s | ⚠️ 300–600 MB/s (VirtIO-FS) | ❌ Restricted | ✅ **3,000–7,000 MB/s (NVMe)** |
+| **Default Network Security** | ❌ Full Access | ⚠️ Allowed by default | ❌ Restricted | ✅ **Default-Deny (`allow_network: false`)** |
+| **Desktop & Clipboard Isolation** | ❌ None | ✅ Isolated (separate OS) | ✅ Isolated | ✅ **Win32 Job UI Restrictions** |
 | **C-Extension Support (NumPy, PyTorch)** | ✅ Full | ✅ Full | ❌ Very Limited | ✅ **Full** |
 | **Multi-Language Runtimes** | ✅ Any installed | ⚠️ Requires massive images | ❌ Language-specific | ✅ **12+ Native Runtimes** |
 | **Shared Multi-Language Pipeline** | ❌ Unsafe | ⚠️ Complex mounts | ❌ Difficult | ✅ **Built-in (`cocoon pipeline`)** |

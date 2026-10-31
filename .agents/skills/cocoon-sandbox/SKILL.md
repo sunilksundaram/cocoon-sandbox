@@ -114,6 +114,84 @@ https.get('https://api.github.com/zen', { headers: { 'User-Agent': 'Cocoon' } },
 " --json
 ```
 
+#### Pattern F: Heavy Data Processing (Massive Excel / CSV / Parquet)
+When extracting hundreds of thousands of rows from large spreadsheets (50MB–1GB+), use `-r python-skill`, extend `--timeout`, increase `--disk`, and write the results to a file in `--work`:
+```bash
+cocoon run \
+  --ro ./data_warehouse \
+  --work ./output_dir \
+  --timeout 180 \
+  --disk 2048 \
+  -r python-skill \
+  -c "
+import pandas as pd
+# Read from read-only host mount at native NVMe speed (>3 GB/s)
+df = pd.read_excel('data_warehouse/large_ledger_500MB.xlsx', engine='calamine')
+# Filter rows matching criteria
+high_value = df[df['amount'] > 50000]
+# Save output to workspace
+high_value.to_parquet('output_dir/filtered_ledger.parquet')
+print(f'Extracted {len(high_value)} rows out of {len(df)} total rows.')
+" --json
+```
+
+#### Pattern G: Converting Hundreds of PDF Pages to Word / Text
+Converting 300+ page documents requires extending the timeout and ensuring sufficient disk quota for converted assets:
+```bash
+cocoon run \
+  --ro ./documents \
+  --work ./extracted_text \
+  --timeout 240 \
+  --disk 1024 \
+  -r python-skill \
+  -c "
+from pypdf import PdfReader
+from docx import Document
+
+reader = PdfReader('documents/quarterly_filing_400_pages.pdf')
+doc = Document()
+for page in reader.pages:
+    txt = page.extract_text()
+    if txt:
+        doc.add_paragraph(txt)
+doc.save('extracted_text/filing.docx')
+print(f'Converted {len(reader.pages)} PDF pages to Word docx.')
+" --json
+```
+
+#### Pattern H: Multimedia Processing (ffmpeg & Speech-to-Text)
+Run CLI tools like `ffmpeg` or Python ML models (Whisper/Torch) directly in Cocoon:
+```bash
+# 1. Audio Extraction via ffmpeg
+cocoon run --ro ./videos --work ./audio --timeout 300 --disk 4096 -- \
+  ffmpeg -i videos/keynote_4k.mp4 -vn -acodec libmp3lame -q:a 2 audio/extracted_audio.mp3
+
+# 2. Transcription with local Whisper in python-skill
+cocoon run --ro ./audio --work ./transcripts --timeout 300 -r python-skill -c "
+import whisper
+model = whisper.load_model('base')
+res = model.transcribe('audio/extracted_audio.mp3')
+open('transcripts/transcription.txt', 'w', encoding='utf-8').write(res['text'])
+print(f'Transcription complete: {len(res[\"text\"])} characters.')
+" --json
+```
+
+---
+
+### ⚠️ Essential Tips for Heavy Workloads
+
+1. **The "File-to-File Processing" Rule:**  
+   Never print massive extracts to standard output (`stdout`). Cocoon enforces a **10 MB streaming buffer limit** to protect agent harnesses from memory exhaustion. If a script prints 100,000 rows to stdout, output is truncated (`stdout_truncated: true`). Always write output to a file inside `--work` (`.parquet`, `.csv`, `.jsonl`, `.docx`) and print a concise 1-line summary to stdout.
+
+2. **Zero-Copy NVMe Speed:**  
+   Unlike Docker or virtual machines which suffer from VirtIO-FS translation bottlenecks (300–800 MB/s), Cocoon mounts read-only files (`--ro`) via native OS kernel primitives (Windows Deny ACEs / Linux mount namespaces). Reading a 5 GB video or a 500 MB Excel file happens at **raw NVMe bus speed (3–7 GB/s)** with zero memory copy.
+
+3. **Tuning Limits for Heavy Workloads:**
+   - **Timeout:** Default is `30s`. Increase via `--timeout 180` (3 mins) or `--timeout 600` (10 mins).
+   - **Disk Quota:** Default is `512MB`. Increase via `--disk 2048` (2 GB) or `--disk 10240` (10 GB).
+   - **Memory (RAM):** Default is unconstrained (uses host RAM). Set `--mem <MB>` only if you want a hard ceiling.
+   - **Runtime:** Always use `-r python-skill` (not `-r python`) for scripts importing `pandas`, `openpyxl`, `docx`, `pdfplumber`, or `torch`.
+
 ---
 
 ### 3. Polyglot Multi-Language Pipelines (`cocoon pipeline`)

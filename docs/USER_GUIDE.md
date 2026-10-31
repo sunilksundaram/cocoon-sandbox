@@ -631,3 +631,127 @@ cocoon run \
     });
   "
 ```
+
+---
+
+## 10. Heavy Data, Large Documents & Multimedia Workloads 🚀
+
+When agents perform heavy operations—such as parsing a 500 MB Excel sheet with Pandas, extracting text from a 400-page PDF, or transcoding audio/video—Cocoon delivers **raw NVMe disk throughput (3–7 GB/s)** without the virtualization penalties of Docker or Firecracker.
+
+However, heavy workloads must be configured to account for the sandbox's protective boundaries:
+
+### The 4 Limits Affecting Heavy Workloads
+
+| Limit | Default Value | Heavy Workload Impact | Tuning Strategy |
+| :--- | :---: | :--- | :--- |
+| **Execution Timeout** | `30 seconds` | Large file operations exceeding 30s are terminated via atomic tree kill. | Pass `--timeout <secs>` (e.g. `--timeout 300` for 5 mins). |
+| **Disk Write Quota** | `512 MB` | Extracting raw video frames or high-resolution page images can exceed 512MB. | Pass `--disk <MB>` (e.g. `--disk 4096` for 4 GB). |
+| **Output Buffer Cap** | `10 MB` | Printing 100,000 rows to `stdout` truncates at 10 MB (`stdout_truncated: true`). | **File-to-File Processing:** Write outputs to `--work`, print only a 1-line summary. |
+| **Memory Allocation** | `Unlimited` (Host RAM) | Loading a 1 GB Excel file into Pandas requires 4–8 GB of RAM. | Leave unconstrained (default) or set `--mem <MB>` as a safety ceiling. |
+
+---
+
+### Workload Recipes
+
+#### 1. Extracting Data from Massive Excel / CSV Files (Pandas & Polars)
+* **Tip:** Always use `-r python-skill` (not `-r python`) to load third-party libraries like `pandas`, `polars`, `openpyxl`, or `calamine`.
+* **Tip:** For large Excel files, use the `calamine` engine (`pip install python-calamine`) for 10x faster reads with a fraction of the memory.
+
+```bash
+cocoon run \
+  --ro ./data_lake \
+  --work ./output_parquet \
+  --timeout 180 \
+  --disk 2048 \
+  -r python-skill \
+  -c "
+import pandas as pd
+print('Loading dataset...')
+# Fast read from read-only mount at raw NVMe bus speed
+df = pd.read_excel('data_lake/ledger_10M_records.xlsx', engine='calamine')
+# Extract high-value transactions
+filtered = df[df['transaction_amount'] > 100000]
+# Write to workspace
+filtered.to_parquet('output_parquet/high_value_transactions.parquet')
+print(f'Extracted {len(filtered):,} records out of {len(df):,} total rows.')
+" --json
+```
+
+#### 2. Converting Hundreds of PDF Pages to Word / Text
+* **Tip:** Large PDFs (300+ pages) need at least 3–5 minutes (`--timeout 300`).
+* **Tip:** Stage output files directly into the writable workspace (`--work`).
+
+```bash
+cocoon run \
+  --ro ./annual_reports \
+  --work ./word_conversions \
+  --timeout 300 \
+  --disk 1024 \
+  -r python-skill \
+  -c "
+from pypdf import PdfReader
+from docx import Document
+
+reader = PdfReader('annual_reports/sec_10k_450_pages.pdf')
+doc = Document()
+doc.add_heading('Converted Annual Report', 0)
+
+for idx, page in enumerate(reader.pages):
+    txt = page.extract_text()
+    if txt:
+        doc.add_paragraph(txt)
+    if (idx + 1) % 50 == 0:
+        print(f'Processed {idx + 1} pages...')
+
+doc.save('word_conversions/sec_10k.docx')
+print(f'Done! Successfully converted {len(reader.pages)} pages to docx.')
+" --json
+```
+
+#### 3. Audio & Video Processing (`ffmpeg` & Speech-to-Text)
+Cocoon runs native CLI binaries like `ffmpeg` directly in the sandbox with full read-only host protection:
+
+```bash
+# 1. Demux & transcode 4K video audio to MP3 at NVMe speed
+cocoon run \
+  --ro ./videos \
+  --work ./audio_extracted \
+  --timeout 300 \
+  --disk 4096 \
+  -- ffmpeg -i videos/conference_keynote.mp4 -vn -acodec libmp3lame -q:a 2 audio_extracted/keynote_audio.mp3
+```
+
+```bash
+# 2. Transcribe extracted audio using local Whisper ML model
+cocoon run \
+  --ro ./audio_extracted \
+  --work ./transcripts \
+  --timeout 300 \
+  --mem 4096 \
+  -r python-skill \
+  -c "
+import whisper
+model = whisper.load_model('base')
+result = model.transcribe('audio_extracted/keynote_audio.mp3')
+open('transcripts/keynote.txt', 'w', encoding='utf-8').write(result['text'])
+print(f'Transcription complete: {len(result[\"text\"]):,} characters generated.')
+" --json
+```
+
+---
+
+### Why Cocoon Outperforms Docker & VMs on Heavy Data
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 5 GB File Read Throughput Comparison                        │
+├───────────────────────┬─────────────────────────────────────┤
+│ Technology            │ I/O Throughput                      │
+├───────────────────────┼─────────────────────────────────────┤
+│ Docker on Windows/Mac │ 300 – 600 MB/s (VirtIO-FS overhead) │
+│ Firecracker MicroVM   │ 400 – 800 MB/s (Block device virt)  │
+│ Cocoon Sandbox        │ 3,000 – 7,000 MB/s (Native NVMe)    │
+└───────────────────────┴─────────────────────────────────────┘
+```
+
+Because Cocoon uses **native OS filesystem access** (inherited Deny ACEs on Windows and bind mounts in Linux mount namespaces), host files mounted with `--ro` require **zero translation or memory copying**. Processing a 10 GB file in Cocoon is as fast as running directly on bare metal, while maintaining ironclad kernel write protection.

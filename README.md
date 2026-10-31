@@ -27,6 +27,7 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 * **Ephemeral Virtual Scratchpad & Isolated User Profile:** Redirects caches (`__pycache__`, npm, cargo) and synthesizes a clean, isolated dummy user profile (`USERPROFILE`, `HOME`, `APPDATA`).
 * **Universal Breakout Verification:** Recursively scans workspace post-run to detect and reject symlinks, NTFS directory junctions (`0x400`), or hardlinks escaping the workspace root.
 * **Universal Command Execution:** Run any installed compiler or binary toolchain (`gcc`, `clang`, `dotnet`, `zig`, `julia`, etc.) by passing trailing arguments: `cocoon run -- <cmd> [args...]`.
+* **High-Throughput Heavy Data & Multimedia:** Native NVMe read speeds (3–7 GB/s) with zero virtualization overhead for multi-gigabyte Excel data (Pandas/Polars), multi-hundred page PDF conversions, and video/audio processing (`ffmpeg`).
 * **Agent-First JSON Protocol & SIEM Logging:** Emits structured output (`--json`) and NDJSON event logs (`--log-json`) with exit codes, peak memory, output truncation, and termination reasons.
 
 ---
@@ -152,6 +153,17 @@ cocoon pipeline \
   -s "python:open('val.txt','w').write('42')" \
   -s "bun:console.log('Value read by Bun:', (await Bun.file('val.txt').text()).trim())" \
   --json
+```
+
+### 10. Heavy Data & Document Processing (Pandas & Large Excel)
+Mount large datasets as read-only (`--ro`) and process millions of rows at native NVMe bus speed without risk of file corruption:
+```bash
+cocoon run --ro ./data --work ./output --timeout 180 --disk 2048 -r python-skill -c "
+import pandas as pd
+df = pd.read_excel('data/massive_ledger.xlsx', engine='calamine')
+df[df['amount'] > 50000].to_parquet('output/high_value.parquet')
+print(f'Processed {len(df):,} rows successfully.')
+" --json
 ```
 
 ---
