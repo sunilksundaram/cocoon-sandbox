@@ -10,7 +10,7 @@
 
 Cocoon is purpose-built for AI agents and code execution:
 * **Zero Host Risk:** Current directory is read-only (`--ro .`) by default; writes are strictly jailed to `--work`.
-* **Sub-Millisecond Startup:** No container or VM initialization latency (< 5ms) — runs directly on native OS isolation primitives (Windows Job Objects/ACLs, Linux Namespaces/cgroups, macOS Seatbelt).
+* **Sub-Millisecond Startup:** No container or VM initialization latency (< 5ms) — runs directly on native OS isolation primitives (Windows Job Objects/ACLs and Linux Namespaces/cgroups).
 * **Automated 30-Second Timeout:** Runaway scripts or infinite loops are terminated automatically.
 * **Agent-First JSON Telemetry:** Emits structured output (`--json`) with exit codes, execution duration, and standard streams.
 * **Polyglot:** Built-in presets for Python, Node.js, Bun, Deno, Go, Java, Rust/Cargo, PowerShell, Bash, Ruby, PHP, and Lua.

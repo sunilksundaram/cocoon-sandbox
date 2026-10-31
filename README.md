@@ -48,16 +48,17 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
                     └─────────────┬──────────────┘
                                   │
          ┌────────────────────────┼────────────────────────┐
-         │                        │                        │
-┌────────▼─────────┐    ┌─────────▼────────┐    ┌──────────▼─────────┐
-│   Linux Driver   │    │   macOS Driver   │    │   Windows Driver   │
-├──────────────────┤    ├──────────────────┤    ├────────────────────┤
-│ • User Namespaces│    │ • Apple Seatbelt │    │ • Job Objects      │
-│ • ro-bind mounts │    │ • SBPL Profile   │    │ • UI Restrictions  │
-│ • tmpfs /tmp     │    │ • Ephemeral /tmp │    │ • Inherited Deny   │
-│ • tmpfs /dev/shm │    │                  │    │   NTFS ACEs        │
-│ • rlimit caps    │    │                  │    │ • Scratchpad VFS   │
-└──────────────────┘    └──────────────────┘    └────────────────────┘
+         │                                                 │
+┌────────▼─────────┐                             ┌─────────▼──────────┐
+│   Linux Driver   │                             │   Windows Driver   │
+├──────────────────┤                             ├────────────────────┤
+│ • User Namespaces│                             │ • Job Objects      │
+│ • ro-bind mounts │                             │ • UI Restrictions  │
+│ • tmpfs /tmp     │                             │ • Inherited Deny   │
+│ • tmpfs /dev/shm │                             │   NTFS ACEs        │
+│ • rlimit caps    │                             │ • Scratchpad VFS   │
+└──────────────────┘                             └────────────────────┘
+             *(macOS Apple Seatbelt driver currently in development)*
 ```
 
 ---
@@ -189,12 +190,14 @@ cocoon run --no-gpu --ro ./models --work ./output --timeout 180 -r python-skill 
 ## 🔒 Security Guarantees & Built-in Invariants
 
 1. **Default-Deny Network (`allow_network: false`):**
-   * Sockets and outbound traffic are completely blocked by default. Sinks proxy variables to `127.0.0.1:0` and unshares network namespaces on Linux. Opt-in with `--allow-network`.
+   * On Linux, network namespaces are unshared (`CLONE_NEWNET`), severing all sockets at the kernel level.
+   * On Windows, proxies are sinkholed to `127.0.0.1:0`, blocking cooperative HTTP/HTTPS traffic. Opt-in with `--allow-network`.
 2. **Read-Only by Default (`--ro .`):**
    * Even if you omit `--ro`, the current working directory is automatically protected as **strictly read-only**.
-   * Opening files in write mode (`'w'`, `'a'`) or attempting deletions triggers immediate `PermissionError` / `EPERM` enforced at the OS kernel level.
-3. **Zero Host Writes (Workdir Isolation):**
-   * Sandboxed processes can **never** write to anything other than the designated `--work` folder (or the auto-cleaned ephemeral scratchpad).
+   * On Linux, mount namespaces enforce read-only status. On Windows, NTFS Deny ACEs block write/append/delete operations on designated folders (`PermissionError: Permission denied`). Ambient host paths outside `--ro` retain standard user read access.
+3. **Workspace Access Control & Ephemeral Scratchpad:**
+   * Writes are confined to the designated `--work` directory or auto-cleaned ephemeral scratchpad.
+   * Workspace DACLs are strictly bounded to the executing user (`%USERNAME%`), eliminating legacy broad access (`Everyone`).
    * Use `--copy <path>` to stage copies of host files into the work folder and manipulate them freely without touching originals.
 4. **Desktop & Clipboard Isolation:**
    * Win32 Job Object UI restrictions prevent child processes from reading the host clipboard (`JOB_OBJECT_UILIMIT_READCLIPBOARD`), modifying the clipboard, or sending synthetic window messages to other applications.

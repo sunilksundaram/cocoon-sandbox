@@ -27,7 +27,7 @@ Cocoon is a **native systems binary** written in Rust. It does **not** require D
 | :--- | :--- | :--- | :--- |
 | **Windows** | x86_64, ARM64 | Windows 10 build 1809+, Windows 11 | Windows Job Objects & NTFS Inherited ACLs |
 | **Linux** | x86_64, aarch64, armv7 | Linux Kernel 4.18+ | Unprivileged User Namespaces & Bubblewrap |
-| **macOS** | Apple Silicon (M1–M4), Intel x86_64 | macOS 12 Monterey+ | Apple Seatbelt Framework (`libsandbox`) |
+| **macOS** | Apple Silicon (M1–M4), Intel x86_64 | macOS 12 Monterey+ | *(Roadmap)* Apple Seatbelt Framework (`libsandbox`) |
 
 ---
 
@@ -73,8 +73,8 @@ If Rust is not already installed on your system, install it via the official [ru
 
 ### Step 2: Clone and Build
 ```bash
-git clone https://github.com/sunilksundaram/cocoon.git
-cd cocoon
+git clone https://github.com/sunilksundaram/cocoon-sandbox.git
+cd cocoon-sandbox
 
 # Build optimized release binary
 cargo build --release
@@ -123,9 +123,9 @@ Cocoon runs unprivileged in user namespaces.
   * **Arch Linux:** `sudo pacman -S bubblewrap`
   * **Alpine Linux:** `sudo apk add bubblewrap`
 
-### macOS (Apple Silicon & Intel)
-* **Zero Configuration:** Uses Apple's kernel-level Seatbelt Sandbox (`libsandbox`). No third-party packages or system extensions needed.
-* Works seamlessly with Homebrew toolchains located in `/opt/homebrew` or `/usr/local`.
+### macOS (Apple Silicon & Intel) - Roadmap
+* Native macOS driver integration using Apple's Seatbelt Sandbox (`libsandbox`) is currently in active development.
+* On Linux and Windows, native drivers (Bubblewrap namespaces and Win32 Job Objects) are fully production-hardened.
 
 ---
 
