@@ -167,27 +167,22 @@ impl Scratchpad {
                         }
                     }
 
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::fs::MetadataExt;
-                        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-                        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-                            if let Ok(canon) = path.canonicalize() {
-                                if !canon.starts_with(root) {
-                                    warn!(
-                                        target: "cocoon::security",
-                                        event = "security_violation",
-                                        violation_type = "junction_escape",
-                                        source_path = %path.display(),
-                                        target_path = %canon.display(),
-                                        "Detected directory junction breakout pointing outside workspace"
-                                    );
-                                    return Err(CocoonError::SecurityViolation(format!(
-                                        "Detected junction breakout pointing outside workspace: {:?} -> {:?}",
-                                        path, canon
-                                    )));
-                                }
-                            }
+                    // Security check: verify that this path's canonical resolution resides strictly within the workspace
+                    // This catches symlinks, NTFS junctions, hardlinks, and reparse points escaping the workspace
+                    if let Ok(canon) = path.canonicalize() {
+                        if !canon.starts_with(root) {
+                            warn!(
+                                target: "cocoon::security",
+                                event = "security_violation",
+                                violation_type = "path_escape",
+                                source_path = %path.display(),
+                                target_path = %canon.display(),
+                                "Detected path escape pointing outside workspace"
+                            );
+                            return Err(CocoonError::SecurityViolation(format!(
+                                "Detected path escape pointing outside workspace: {:?} -> {:?}",
+                                path, canon
+                            )));
                         }
                     }
 

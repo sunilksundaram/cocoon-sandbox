@@ -299,6 +299,9 @@ impl VirtualView {
         envs.insert("RUBYOPT".into(), "".into());
         envs.insert("PERL5OPT".into(), "".into());
 
+        // Security: Mitigate DLL preloading from Current Working Directory (CWD) on Windows
+        envs.insert("CWDIllegalInDllSearch".into(), "0x2".into());
+
         // Offline toolchain configuration (enforces offline dependency resolution)
         envs.insert("CARGO_NET_OFFLINE".into(), "true".into());
         envs.insert("GOPROXY".into(), "off".into());

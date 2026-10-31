@@ -64,7 +64,9 @@ impl SandboxDriver for LinuxNamespaceDriver {
             .arg("--proc")
             .arg("/proc")
             .arg("--tmpfs")
-            .arg("/tmp");
+            .arg("/tmp")
+            .arg("--tmpfs")
+            .arg("/dev/shm");
 
         // Network isolation
         if config.limits.allow_network {
@@ -105,6 +107,25 @@ impl SandboxDriver for LinuxNamespaceDriver {
         }
         for (k, v) in &config.env {
             cmd.env(k, v);
+        }
+
+        // Explicitly strip host credential and IPC socket environment variables even if inherit_env is enabled
+        for dangerous_var in &[
+            "DOCKER_HOST",
+            "SSH_AUTH_SOCK",
+            "WSL_DISTRO_NAME",
+            "WSL_INTEROP",
+            "GPG_AGENT_INFO",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GIT_ASKPASS",
+            "AZURE_CONFIG_DIR",
+            "KUBECONFIG",
+        ] {
+            cmd.env_remove(dangerous_var);
         }
 
         cmd.stdin(if config.stdin_data.is_some() {

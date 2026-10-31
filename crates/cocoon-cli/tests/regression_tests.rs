@@ -148,3 +148,10 @@ fn regression_go_preset_offline() {
         "Regression: Go preset omitted -mod=readonly flag"
     );
 }
+
+#[test]
+fn regression_clean_scratchpad_passes_breakout_verification() {
+    // Invariant: Ephemeral scratchpads must pass breakout verification out of the box
+    let scratchpad = Scratchpad::new().expect("Create scratchpad");
+    assert!(scratchpad.verify_no_breakouts().is_ok());
+}

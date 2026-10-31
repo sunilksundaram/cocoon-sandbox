@@ -18,13 +18,18 @@ use windows_sys::Win32::Security::Isolation::{
 
 type PSID = *mut std::ffi::c_void;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectCpuRateControlInformation,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicUIRestrictions,
+    JobObjectCpuRateControlInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
     JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_JOB_MEMORY,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP,
+    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
+    JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
 
 #[derive(Default)]
@@ -96,6 +101,31 @@ impl WindowsJobObjectDriver {
                         "Failed to apply Windows Job Object CPU rate limits".into(),
                     ));
                 }
+            }
+
+            // Enforce UI, Clipboard, and Desktop restrictions (prevents clipboard theft, shatter attacks, desktop injection)
+            let mut ui_restrictions: JOBOBJECT_BASIC_UI_RESTRICTIONS = std::mem::zeroed();
+            ui_restrictions.UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES
+                | JOB_OBJECT_UILIMIT_READCLIPBOARD
+                | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
+                | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+                | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+                | JOB_OBJECT_UILIMIT_GLOBALATOMS
+                | JOB_OBJECT_UILIMIT_DESKTOP
+                | JOB_OBJECT_UILIMIT_EXITWINDOWS;
+
+            let res_ui = SetInformationJobObject(
+                job,
+                JobObjectBasicUIRestrictions,
+                &ui_restrictions as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            );
+
+            if res_ui == 0 {
+                CloseHandle(job);
+                return Err(CocoonError::Platform(
+                    "Failed to apply Windows Job Object UI restrictions".into(),
+                ));
             }
 
             Ok(job)
@@ -179,6 +209,25 @@ impl SandboxDriver for WindowsJobObjectDriver {
                     cmd.env(var, val);
                 }
             }
+        }
+
+        // Explicitly strip host credential and IPC pipe environment variables even if inherit_env is enabled
+        for dangerous_var in &[
+            "DOCKER_HOST",
+            "SSH_AUTH_SOCK",
+            "WSL_DISTRO_NAME",
+            "WSL_INTEROP",
+            "GPG_AGENT_INFO",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GIT_ASKPASS",
+            "AZURE_CONFIG_DIR",
+            "KUBECONFIG",
+        ] {
+            cmd.env_remove(dangerous_var);
         }
 
         // Enforce network isolation in environment if disabled
