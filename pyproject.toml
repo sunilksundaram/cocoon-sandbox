@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cocoon-sandbox"
-version = "0.2.0"
+version = "0.2.1"
 description = "Lightweight cross-platform sandbox with virtual and read-only filesystems for AI agents"
 readme = "README.md"
 authors = [

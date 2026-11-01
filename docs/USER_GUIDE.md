@@ -994,4 +994,150 @@ cocoon run -r node -c "console.log('Step 1 complete'); console.log('Step 2 compl
 {"event":"complete","exit_code":0,"duration_ms":145.2,"timed_out":false,"oom_killed":false,"peak_memory_mb":18}
 ```
 
+---
+
+## 16. Native Model Context Protocol (MCP) Server (`cocoon mcp`)
+
+Cocoon embeds a native stdio MCP server compliant with the Model Context Protocol (JSON-RPC 2.0). It provides out-of-the-box sandbox execution tools for Cursor, Claude Desktop, Antigravity, and AutoGen.
+
+### Starting the Server
+```bash
+cocoon mcp
+```
+
+### Exposed Tools
+* `execute_code`: Executes untrusted code with read-only workspace mounts and hard memory/CPU caps.
+  * Inputs: `code` (string, required), `runtime` (preset string, default "python"), `timeout` (seconds, default 30), `work_dir` (optional path).
+* `execute_skill`: Executes document processing tasks (Excel/Word/PDF) with read-only file mounts.
+  * Inputs: `code` (string, required), `input_files` (array of paths), `work_dir` (optional path), `timeout` (seconds, default 60).
+* `inspect_runtimes`: Discovers available compilers and interpreters on the host.
+* `doctor`: Runs diagnostic checks on sandbox drivers, filesystem isolation, and toolchains.
+
+### Desktop Client Configuration (`claude_desktop_config.json` / `mcp_config.json`)
+```json
+{
+  "mcpServers": {
+    "cocoon": {
+      "command": "cocoon",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+---
+
+## 17. CI/CD Setup, Testing, and Release Pipeline 🚀
+
+This section provides the end-to-end operational guide for continuous integration, multi-stage testing, CVE scanning, and automated cross-platform releases.
+
+### 1. Local Pre-Flight Verification Suite
+
+Before pushing changes or tagging releases, run the comprehensive verification pipeline locally:
+
+```bash
+# 1. Code Formatting
+cargo fmt --all -- --check
+
+# 2. Static Analysis & Clippy (Host & Cross-Target)
+cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --target x86_64-unknown-linux-gnu
+
+# 3. Unit & Regression Tests (all 36 tests)
+cargo test --all-targets
+
+# 4. Environment Diagnostics Self-Test
+cargo run --bin cocoon -- doctor --json
+
+# 5. Optimized Release Build
+cargo build --release
+```
+
+---
+
+### 2. Continuous Integration Pipeline (`.github/workflows/ci.yml`)
+
+The CI workflow triggers on every push and pull request to `main`:
+
+```mermaid
+flowchart LR
+    A["git push / PR"] --> B["1. CVE Security Audit (RustSec)"]
+    A --> C["2. Static Analysis (clippy + rustfmt)"]
+    C --> D["3. Test Matrix (Ubuntu, Windows, macOS)"]
+    D --> E["cargo check --all-targets"]
+    D --> F["cargo test --all --verbose"]
+    D --> G["cargo build --release"]
+```
+
+* **Job 1: CVE Security Audit (`cve-security-audit`)**: Scans all crate dependencies against the RustSec Advisory Database.
+* **Job 2: Static Analysis (`static-analysis`)**: Enforces formatting (`cargo fmt --check`) and lints (`cargo clippy -- -D warnings`).
+* **Job 3: Cross-Platform Matrix (`unit-and-regression-tests`)**: Executes tests in parallel across:
+  * `ubuntu-latest` (bwrap, Linux namespaces, cgroups)
+  * `windows-latest` (Win32 Job Objects, NTFS Deny ACEs)
+  * `macos-latest` (Apple Seatbelt libsandbox, SBPL)
+
+---
+
+### 3. Automated Multi-Platform Release Pipeline (`.github/workflows/release.yml`)
+
+Triggered automatically whenever a version tag (`v*`) is pushed to GitHub:
+
+```mermaid
+flowchart TD
+    T["git push origin v0.2.1"] --> B["Build Standalone Binaries"]
+    T --> W["Build Python Wheels (Maturin)"]
+    T --> S["Build Source Dist (sdist)"]
+
+    B --> Rel["GitHub Releases\n(Tarballs & Zips)"]
+    W --> PyPI["Publish to PyPI\n(Universal & Arch Wheels)"]
+    S --> PyPI
+    T --> Crates["Publish to Crates.io\n(Cargo Packages)"]
+```
+
+#### Built Binary Targets:
+* **Linux x86_64**: `x86_64-unknown-linux-gnu` (`cocoon-linux-x86_64.tar.gz`)
+* **Linux ARM64**: `aarch64-unknown-linux-gnu` (`cocoon-linux-aarch64.tar.gz`)
+* **Windows x86_64**: `x86_64-pc-windows-msvc` (`cocoon-windows-x86_64.zip`)
+* **macOS Apple Silicon**: `aarch64-apple-darwin` (`cocoon-macos-aarch64.tar.gz`)
+* **macOS Intel**: `x86_64-apple-darwin` (`cocoon-macos-x86_64.tar.gz`)
+
+#### Published Packages:
+1. **PyPI (`cocoon-sandbox`)**: Wheels containing both compiled binaries and the typed Python client (`from cocoon import run, pipeline, doctor`).
+2. **Crates.io**:
+   * `cocoon-core`: Core traits, configuration structs, resource limit types.
+   * `cocoon-fs`: Virtual view, scratchpad, symlink breakout verification.
+   * `cocoon-platform`: OS drivers (Job Objects, Bubblewrap, Apple Seatbelt).
+   * `cocoon-runtimes`: Polyglot presets and interpreter discovery.
+   * `cocoon-sandbox`: The main `cocoon` CLI executable.
+3. **GitHub Release**: Release notes, sha256 checksums, and standalone binary archives.
+
+---
+
+### 4. Step-by-Step Release Walkthrough
+
+When ready to release a new version:
+
+```bash
+# Step 1: Bump version in Cargo.toml, pyproject.toml, and python/cocoon/__init__.py
+# (e.g. 0.2.0 -> 0.2.1)
+
+# Step 2: Update Cargo.lock
+cargo check
+
+# Step 3: Run the local verification suite
+cargo test --all-targets
+
+# Step 4: Commit changes and tag
+git add -A
+git commit -m "chore(release): bump version to 0.2.1"
+git tag -a v0.2.1 -m "Release v0.2.1: Doctor, MCP Server, Streaming, macOS Seatbelt, Python SDK, Architect Skill"
+
+# Step 5: Push main branch and tag to remote
+git push origin main
+git push origin v0.2.1
+```
+
+Once pushed, GitHub Actions automatically builds, packages, tests, and publishes the release assets across all destinations.
+
+
 

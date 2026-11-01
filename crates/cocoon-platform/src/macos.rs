@@ -224,7 +224,7 @@ impl SandboxDriver for MacOsSeatbeltDriver {
 
             if let Some(ref input) = config.stdin_data {
                 if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(input.as_bytes());
+                    let _ = stdin.write_all(input);
                 }
             }
 
@@ -395,7 +395,11 @@ mod tests {
         let profile = MacOsSeatbeltDriver::generate_sbpl_profile(&config, &vfs);
         assert!(profile.contains("(deny default)"));
         assert!(!profile.contains("(allow network*)"));
-        assert!(profile.contains(&ro_dir.to_string_lossy().replace('\\', "/")));
+        let mounted_path = vfs.validated_mounts[0]
+            .host_path
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(profile.contains(&mounted_path));
     }
 
     #[test]
