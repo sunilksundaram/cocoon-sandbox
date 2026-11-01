@@ -12,7 +12,8 @@ description: >-
 `cocoon` is a native, featherweight cross-platform sandbox (< 5ms startup) that provides virtual and read-only filesystem views. It allows agents to safely execute code in **Python, Node.js, Bun, Deno, Go, Java, Rust, PowerShell, Bash, Ruby, PHP, Lua, or any installed compiler**.
 
 *For complete security specifications, see the [Security & Vulnerability Remediation Guide](../../../docs/SECURITY_AND_VULNERABILITIES.md).*  
-*For framework integration patterns (AutoGen, LangChain, LangGraph, LlamaIndex, Claude/MCP, Hermes), see the [User & Integration Guide](../../../docs/USER_GUIDE.md).*
+*For framework integration patterns (AutoGen, LangChain, LangGraph, LlamaIndex, Claude/MCP, Hermes), see the [User & Integration Guide](../../../docs/USER_GUIDE.md).*  
+*For enterprise production topologies, raw socket severance, and dev-vs-prod deployment blueprints, see the [Enterprise & Production Deployment Guide](../../../docs/ENTERPRISE_PRODUCTION_GUIDE.md).*
 
 ---
 
@@ -339,6 +340,22 @@ res = pipeline([
 ])
 print(res.success, res.steps[-1].stdout)
 ```
+
+---
+
+## 🏛️ Dev vs. Production Strategy & Topologies
+
+Cocoon embraces a clear two-tier operational model tailored for developer velocity and zero-trust production:
+
+| Stage | Environment | Isolation Mechanism | Latency | Network Boundary | Best Used For |
+| :--- | :--- | :--- | :---: | :--- | :--- |
+| **Development** | Windows / macOS Workstations | Native OS Job Objects & cooperative proxy sink (`127.0.0.1:0`) | **< 5ms** | Cooperative HTTP/HTTPS clients blocked; UI/clipboard protected | Fast local iteration, debugging, agent tool testing, zero VM overhead |
+| **Production (Option A)** | Linux Bare-Metal / Kubernetes | Bubblewrap + private user & mount namespaces | **< 5ms** | **`CLONE_NEWNET`**: Full kernel network namespace severance | High-throughput cloud workers, multi-tenant agent backends, unconstrained polyglot execution |
+| **Production (Option B)** | macOS Build Cloud | Apple Seatbelt (`libsandbox`) dynamic SBPL | **< 3ms** | **Kernel Socket Refusal**: Dynamic SBPL denies outbound network syscalls | Apple Silicon runners, iOS/macOS CI/CD, local Mac agents |
+| **Production (Option C)** | Windows Cloud / Server | Cocoon inside minimal Docker (`--network none`) | **Container** | **Kernel Socket Severance**: Container network namespace severance | Windows-only production workloads requiring guaranteed raw socket refusal |
+
+> [!TIP]
+> **Production Windows Rule**: If running untrusted code on Windows in production where untrusted scripts might attempt low-level raw socket calls (`socket.connect()`), deploy Cocoon inside Docker (`docker run --network none ...`) or enforce host Windows Defender Firewall outbound rules. For full blueprints, see the [Enterprise & Production Deployment Guide](../../../docs/ENTERPRISE_PRODUCTION_GUIDE.md).
 
 ---
 

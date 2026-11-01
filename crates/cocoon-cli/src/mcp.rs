@@ -120,7 +120,7 @@ fn handle_request(req: &JsonRpcRequest, driver: Arc<dyn SandboxDriver>) -> Optio
                                 },
                                 "runtime": {
                                     "type": "string",
-                                    "enum": ["python", "node", "bun", "deno", "go", "rust", "pwsh", "bash", "ruby", "php", "lua"],
+                                    "enum": ["python", "node", "bun", "deno", "go", "rust", "java", "pwsh", "bash", "ruby", "php", "lua"],
                                     "default": "python",
                                     "description": "The language runtime preset to use"
                                 },

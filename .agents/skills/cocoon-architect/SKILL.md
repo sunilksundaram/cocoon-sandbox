@@ -10,6 +10,8 @@ description: >-
 
 This skill is designed for **Builder Agents, Platform Engineers, and Solution Architects** who need to design, provision, configure, and embed `cocoon-sandbox` into agent harnesses, CI/CD pipelines, evaluation engines, or production backends.
 
+*For complete enterprise deployment topologies, raw socket severance, Kubernetes pod specs, and production container blueprints, see the [Enterprise & Production Deployment Guide](../../../docs/ENTERPRISE_PRODUCTION_GUIDE.md).*
+
 ---
 
 ## 🏛️ 1. The Core Architectural Philosophy
@@ -260,6 +262,48 @@ For orchestrators that manage multiple environments, you can define profiles in 
   }
 }
 ```
+
+---
+
+### Blueprint 4: Production Container & Zero-Trust Backend Deployment
+
+When provisioning Cocoon in enterprise production, follow the platform deployment topology matrix:
+
+```mermaid
+flowchart TD
+    Task[Incoming Untrusted Code Evaluation] --> Platform{Host Platform?}
+    Platform -->|Linux Bare-Metal / K8s| LinuxPath[Bubblewrap + CLONE_NEWNET\n< 5ms startup, Kernel Socket Severed]
+    Platform -->|macOS Cloud Runner| MacPath[Apple Seatbelt libsandbox\n< 3ms startup, Kernel Deny Socket]
+    Platform -->|Windows Dev / Workstation| WinDev[Bare-Metal Job Objects + Proxy Sink\n< 5ms startup, Fast Local Velocity]
+    Platform -->|Windows Server Prod| WinProd[Docker Container --network none + Cocoon\nGuaranteed Raw Socket Severance]
+```
+
+#### 1. Polyglot Production Presets Hardening
+When architects configure non-Python runtimes in production, enforce runtime-specific flags:
+* **Node.js**: Runs with `--no-addons` to prevent native C++ binary module hijacking.
+* **Bun**: Runs with `--no-addons` and sandbox env protections.
+* **Deno**: Runs hermetically without `--allow-net` or `--allow-run`.
+* **Go**: Isolates build artifacts by overriding `GOCACHE` and `GOTMPDIR` to the ephemeral scratchpad.
+* **Rust / Cargo**: Directs `CARGO_TARGET_DIR` and `CARGO_HOME` to ephemeral scratchpad.
+* **Java**: Constrains JVM heap using `-XX:MaxRAMPercentage=90` to align with the 95% physical hardware ceiling.
+* **Ruby**: Disables Rubygems loading via `--disable-gems`.
+* **Bash / PowerShell**: Runs non-interactive (`-NoProfile -NonInteractive` / `--noprofile --norc`).
+
+#### 2. Windows Production Docker Blueprint
+If the production infrastructure runs on Windows Server and enterprise compliance requires absolute raw socket refusal, wrap the execution inside a minimal hardened container:
+
+```bash
+docker run --rm \
+  --network none \
+  --memory 2g \
+  --cpus 2.0 \
+  -v "C:\data:C:\data:ro" \
+  -v "C:\workspace:C:\workspace:rw" \
+  ghcr.io/sunilksundaram/cocoon-sandbox:latest \
+  cocoon run --ro C:\data --work C:\workspace --runtime python -c "print('Hardened Prod Execution')" --json
+```
+
+For full Kubernetes Pod manifests, FastAPI worker pools, and SIEM logging configurations, consult the [Enterprise & Production Deployment Guide](../../../docs/ENTERPRISE_PRODUCTION_GUIDE.md).
 
 ---
 

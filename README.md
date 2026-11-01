@@ -12,7 +12,7 @@
 
 Cocoon allows AI agents, code evaluation suites, and developers to safely run untrusted scripts in **Python, Node.js, Bun, Deno, Go, Java, Rust, PowerShell, Bash, Ruby, PHP, Lua, and any binary compiler** without the latency or complexity of heavyweight containers or virtual machines.
 
-👉 **[Installation Guide & Prerequisites](docs/INSTALLATION.md)** | **[User & Agent Integration Guide](docs/USER_GUIDE.md)** | **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)**
+👉 **[Installation Guide & Prerequisites](docs/INSTALLATION.md)** | **[User & Agent Integration Guide](docs/USER_GUIDE.md)** | **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)** | **[Enterprise & Production Guide](docs/ENTERPRISE_PRODUCTION_GUIDE.md)**
 
 ---
 
@@ -223,7 +223,7 @@ cocoon run --no-gpu --ro ./models --work ./output --timeout 180 -r python-skill 
 13. **Crash Core Dump Suppression:**
     * Injects `RLIMIT_CORE=0` on Linux and suppresses WER crash popups on Windows, eliminating multi-gigabyte core dumps and prompt memory leakage.
 
-For a comprehensive breakdown of all threat models, CVE remediations, and OS defensive layers, see the **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)**.
+For a comprehensive breakdown of all threat models, CVE remediations, and OS defensive layers, see the **[Security & Vulnerability Remediation Guide](docs/SECURITY_AND_VULNERABILITIES.md)** and the **[Enterprise & Production Deployment Guide](docs/ENTERPRISE_PRODUCTION_GUIDE.md)**.
 
 ---
 

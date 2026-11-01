@@ -2,7 +2,7 @@
 
 > A complete guide for using Cocoon as a standalone sandbox, with major agent frameworks (Microsoft Agent Framework, LangChain, LangGraph, LlamaIndex), and agent harnesses (Claude Desktop, GitHub Copilot, Hermes, Cursor, Antigravity, and custom agent loops).
 
-👉 *Need setup or prerequisite instructions? See the [Installation Guide](INSTALLATION.md) and the [Security & Vulnerability Remediation Guide](SECURITY_AND_VULNERABILITIES.md).*
+👉 *Need setup or prerequisite instructions? See the [Installation Guide](INSTALLATION.md), the [Security & Vulnerability Remediation Guide](SECURITY_AND_VULNERABILITIES.md), and the [Enterprise & Production Guide](ENTERPRISE_PRODUCTION_GUIDE.md).*
 
 ---
 
@@ -1087,7 +1087,7 @@ Triggered automatically whenever a version tag (`v*`) is pushed to GitHub.
 
 ```mermaid
 flowchart TD
-    T["git push origin v0.2.2"] --> Gate1["0a. Pre-Release CVE Audit (RustSec)"]
+    T["git push origin v0.3.0"] --> Gate1["0a. Pre-Release CVE Audit (RustSec)"]
     T --> Gate2["0b. Pre-Release Test Matrix (Ubuntu, Windows, macOS)"]
 
     Gate1 --> Gate["All Pre-Release Tests Pass (Fail-Fast)"]
@@ -1128,7 +1128,7 @@ When ready to release a new version:
 
 ```bash
 # Step 1: Bump version in Cargo.toml, pyproject.toml, and python/cocoon/__init__.py
-# (e.g. 0.2.1 -> 0.2.2)
+# (e.g. 0.2.2 -> 0.3.0)
 
 # Step 2: Update Cargo.lock
 cargo check
@@ -1138,12 +1138,12 @@ cargo test --all-targets
 
 # Step 4: Commit changes and tag
 git add -A
-git commit -m "chore(release): bump version to 0.2.2"
-git tag -a v0.2.2 -m "Release v0.2.2: macOS fixes, gated release workflow, and CI/CD user guide"
+git commit -m "chore(release): bump version to 0.3.0"
+git tag -a v0.3.0 -m "Release v0.3.0: Enterprise & Production Guide, builder architect skill, and polyglot MCP runtime expansion"
 
 # Step 5: Push main branch and tag to remote
 git push origin main
-git push origin v0.2.2
+git push origin v0.3.0
 ```
 
 Once pushed, GitHub Actions runs the pre-release test gates on Ubuntu, Windows, and macOS. Only when all tests pass are binaries built, PyPI updated, and crates published to Crates.io.
