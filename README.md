@@ -33,6 +33,10 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
 * **GPU VRAM & Driver Isolation (`--no-gpu`):** Multi-vendor driver detachment (NVIDIA CUDA, AMD ROCm/HIP, Intel oneAPI, OpenCL) via `--no-gpu`. Auto-injects PyTorch VRAM fragmentation guards (`max_split_size_mb:128`) when GPU is permitted for local SLMs and fine-tuning.
 * **Process Priority & Core Dump Hardening:** Permanently locks process priority to `NORMAL_PRIORITY_CLASS` (Windows) and blocks real-time elevation (`RLIMIT_RTPRIO=0` on Linux) to prevent scheduler starvation. Suppresses crash core dumps (`RLIMIT_CORE=0`) to prevent disk flooding and prompt leaks.
 * **Agent-First JSON Protocol & SIEM Logging:** Emits structured output (`--json`) and NDJSON event logs (`--log-json`) with exit codes, peak memory, output truncation, and termination reasons.
+* **Native Model Context Protocol (MCP) Server (`cocoon mcp`):** Connect Cocoon directly to Claude Desktop, Cursor, and Antigravity over stdio with built-in `execute_code`, `execute_skill`, and `inspect_runtimes` tools.
+* **Environment Diagnostic Doctor (`cocoon doctor`):** Self-test command verifying host sandbox drivers, NTFS ACLs, user namespaces, and 12+ language runtimes.
+* **Real-Time Streaming Output (`--stream`):** Live chunked NDJSON streaming for long-running batch jobs, SLM inference, and multimedia pipelines.
+* **Native Python Client SDK (`import cocoon`):** Clean, typed 2-line integration for Python AI agent frameworks (LangChain, AutoGen, CrewAI, LlamaIndex).
 
 ---
 
@@ -42,23 +46,22 @@ Cocoon allows AI agents, code evaluation suites, and developers to safely run un
                     ┌────────────────────────────┐
                     │    AI Agent / Host App     │
                     └─────────────┬──────────────┘
-                                  │ (CLI / Rust / JSON / SIEM)
+                                  │ (CLI / Rust / Python / MCP)
                     ┌─────────────▼──────────────┐
                     │       Cocoon Engine        │
                     └─────────────┬──────────────┘
                                   │
          ┌────────────────────────┼────────────────────────┐
-         │                                                 │
-┌────────▼─────────┐                             ┌─────────▼──────────┐
-│   Linux Driver   │                             │   Windows Driver   │
-├──────────────────┤                             ├────────────────────┤
-│ • User Namespaces│                             │ • Job Objects      │
-│ • ro-bind mounts │                             │ • UI Restrictions  │
-│ • tmpfs /tmp     │                             │ • Inherited Deny   │
-│ • tmpfs /dev/shm │                             │   NTFS ACEs        │
-│ • rlimit caps    │                             │ • Scratchpad VFS   │
-└──────────────────┘                             └────────────────────┘
-             *(macOS Apple Seatbelt driver currently in development)*
+         │                        │                        │
+┌────────▼─────────┐    ┌─────────▼────────┐    ┌──────────▼─────────┐
+│   Linux Driver   │    │   macOS Driver   │    │   Windows Driver   │
+├──────────────────┤    ├──────────────────┤    ├────────────────────┤
+│ • User Namespaces│    │ • Apple Seatbelt │    │ • Job Objects      │
+│ • ro-bind mounts │    │ • SBPL Profile   │    │ • UI Restrictions  │
+│ • tmpfs /tmp     │    │ • Dynamic Sandbox│    │ • Inherited Deny   │
+│ • tmpfs /dev/shm │    │ • POSIX rlimits  │    │   NTFS ACEs        │
+│ • rlimit caps    │    │ • Ephemeral VFS  │    │ • Scratchpad VFS   │
+└──────────────────┘    └──────────────────┘    └────────────────────┘
 ```
 
 ---

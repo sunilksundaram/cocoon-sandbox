@@ -262,15 +262,96 @@ Supported presets: `python`, `python-skill`, `node`, `bun`, `deno`, `go`, `java`
 
 ---
 
+### 6. Real-Time Streaming Output (`--stream`)
+For long-running tasks, agents or UIs can stream NDJSON stdout/stderr events live as chunks arrive:
+
+```bash
+cocoon run --runtime python -c "
+import time
+for i in range(3):
+    print(f'tick {i}', flush=True)
+    time.sleep(0.5)
+" --stream
+```
+
+**Stream Event Flow:**
+```ndjson
+{"event":"start","executable":"python"}
+{"event":"stdout","data":"tick 0\n"}
+{"event":"stdout","data":"tick 1\n"}
+{"event":"stdout","data":"tick 2\n"}
+{"event":"complete","exit_code":0,"duration_ms":1524.2,"timed_out":false,"oom_killed":false,"stdout_truncated":false,"stderr_truncated":false,"peak_memory_mb":18,"termination_reason":null}
+```
+
+---
+
+### 7. Environment Health & Diagnostics (`cocoon doctor`)
+Self-test verifying platform drivers, NTFS Deny ACLs, Win32 Job Objects, Linux namespaces, macOS Seatbelt, ephemeral scratchpad, and all language toolchains:
+
+```bash
+cocoon doctor
+cocoon doctor --json
+```
+
+---
+
+### 8. Native Model Context Protocol (MCP) Server (`cocoon mcp`)
+Cocoon provides an embedded stdio MCP server for agent harnesses (Cursor, Claude Desktop, Antigravity, AutoGen):
+
+```bash
+cocoon mcp
+```
+
+Exposed MCP Tools:
+- `execute_code`: Sandboxed polyglot execution with read-only workspace and hard memory/CPU caps.
+- `execute_skill`: Document manipulation (Excel/Word/PDF) with read-only input file mounts.
+- `inspect_runtimes`: Host interpreter & compiler discovery.
+- `doctor`: Comprehensive diagnostic self-test.
+
+---
+
+### 9. Native Python SDK (`import cocoon`)
+Agents building nested pipelines or Python tools can use the bundled SDK directly:
+
+```python
+from cocoon import run, pipeline, doctor
+
+# Run isolated code
+res = run(
+    code="print('Hello from sandbox')",
+    runtime="python",
+    ro=["./data"],
+    timeout=30,
+)
+print(res.exit_code, res.stdout)
+
+# Stream chunks in real-time
+res = run(
+    code="print('Streaming chunk')",
+    stream=True,
+    on_chunk=lambda evt: print(evt),
+)
+
+# Run polyglot pipeline
+res = pipeline([
+    "python:open('x.txt','w').write('42')",
+    "pwsh:Get-Content x.txt",
+])
+print(res.success, res.steps[-1].stdout)
+```
+
+---
+
 ## 🔒 Built-in Sandbox Invariants (Enforced by Default)
 
 1. **Default-Deny Network (`allow_network: false`):**
    * **Linux:** Bubblewrap severs all network namespaces (`CLONE_NEWNET`). Outbound TCP/UDP sockets fail with `Network is unreachable`.
+   * **macOS:** Apple Seatbelt (libsandbox) blocks outbound socket creation (`(deny default)` without `(allow network*)`).
    * **Windows:** Standard proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) sink to `127.0.0.1:0`. Cooperative HTTP clients (`requests`, `urllib`, `fetch`, `curl`, `pip`) fail immediately. *Note:* Raw `socket.connect()` calls that bypass proxy settings are not blocked on bare-metal Windows; use Docker/WSL2 or firewall rules if strict socket severance is required.
 
 2. **Read-Only by Default (`--ro .`):**
    * The current working directory is automatically mounted as **strictly read-only** by default.
-   * On Linux, mount namespaces enforce read-only status. On Windows, NTFS Deny ACEs block write/append/delete operations on designated folders (`PermissionError: Permission denied`). Ambient host paths outside `--ro` retain standard user read access.
+   * On Linux, mount namespaces enforce read-only status. On macOS, Seatbelt SBPL denies write operations. On Windows, NTFS Deny ACEs block write/append/delete operations on designated folders (`PermissionError: Permission denied`). Ambient host paths outside `--ro` retain standard user read access.
 
 3. **Zero Host Writes & Workspace Access Control:**
    * Code can **never** get write access to anything other than the designated `--work` folder (or the auto-cleaned ephemeral scratchpad).

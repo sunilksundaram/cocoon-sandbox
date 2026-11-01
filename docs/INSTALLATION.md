@@ -27,7 +27,7 @@ Cocoon is a **native systems binary** written in Rust. It does **not** require D
 | :--- | :--- | :--- | :--- |
 | **Windows** | x86_64, ARM64 | Windows 10 build 1809+, Windows 11 | Windows Job Objects & NTFS Inherited ACLs |
 | **Linux** | x86_64, aarch64, armv7 | Linux Kernel 4.18+ | Unprivileged User Namespaces & Bubblewrap |
-| **macOS** | Apple Silicon (M1–M4), Intel x86_64 | macOS 12 Monterey+ | *(Roadmap)* Apple Seatbelt Framework (`libsandbox`) |
+| **macOS** | Apple Silicon (M1–M4), Intel x86_64 | macOS 12 Monterey+ | Apple Seatbelt Framework (`libsandbox`) |
 
 ---
 
@@ -123,9 +123,9 @@ Cocoon runs unprivileged in user namespaces.
   * **Arch Linux:** `sudo pacman -S bubblewrap`
   * **Alpine Linux:** `sudo apk add bubblewrap`
 
-### macOS (Apple Silicon & Intel) - Roadmap
-* Native macOS driver integration using Apple's Seatbelt Sandbox (`libsandbox`) is currently in active development.
-* On Linux and Windows, native drivers (Bubblewrap namespaces and Win32 Job Objects) are fully production-hardened.
+### macOS (Apple Silicon & Intel)
+* **Zero Configuration:** Uses Apple's kernel-level Seatbelt Sandbox (`libsandbox`). Generates dynamic SBPL isolation profiles with no third-party packages or kernel extensions needed.
+* Works seamlessly with Homebrew toolchains located in `/opt/homebrew` or `/usr/local`.
 
 ---
 
@@ -206,21 +206,25 @@ Cocoon executes runtimes installed on your host machine. Install only the runtim
 
 ## 7. Agent Skill & MCP Server Integration
 
-### Step 1: Install the Agent Skill
-To make Cocoon automatically discoverable by AI assistants and coding agents:
+### Step 1: Install the Agent Skills
+To make Cocoon automatically discoverable by AI assistants, builder agents, and coding agents:
 
-* **Workspace Level:** Copy [`SKILL.md`](../.agents/skills/cocoon-sandbox/SKILL.md) into your repository's `.agents/skills/cocoon-sandbox/SKILL.md`.
-* **Global Level:** Copy `SKILL.md` into `~/.gemini/config/skills/cocoon-sandbox/SKILL.md` (or `%USERPROFILE%\.gemini\config\skills\cocoon-sandbox\SKILL.md` on Windows).
+* **Execution Skill (`cocoon-sandbox`)**: Directs models how to safely execute code across runtimes.
+  * Workspace: [`.agents/skills/cocoon-sandbox/SKILL.md`](../.agents/skills/cocoon-sandbox/SKILL.md)
+  * Global: `~/.gemini/config/skills/cocoon-sandbox/SKILL.md` (or `%USERPROFILE%\.gemini\config\skills\cocoon-sandbox\SKILL.md`).
+* **Builder & Architecture Skill (`cocoon-architect`)**: Directs platform builder agents how to configure, tailor, and provision sandbox chassis profiles based on business requirements.
+  * Workspace: [`.agents/skills/cocoon-architect/SKILL.md`](../.agents/skills/cocoon-architect/SKILL.md)
+  * Global: `~/.gemini/config/skills/cocoon-architect/SKILL.md`.
 
 ### Step 2: Configure Desktop Harnesses (Claude Desktop, Cursor, Antigravity)
-Add Cocoon as a local Model Context Protocol (MCP) tool in your `claude_desktop_config.json` or `mcp_config.json`:
+Add Cocoon's native Model Context Protocol (MCP) server in your `claude_desktop_config.json` or `mcp_config.json`:
 
 ```json
 {
   "mcpServers": {
     "cocoon": {
       "command": "cocoon",
-      "args": ["run", "--json"]
+      "args": ["mcp"]
     }
   }
 }

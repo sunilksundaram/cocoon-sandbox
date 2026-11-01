@@ -37,5 +37,7 @@ Documentation = "https://github.com/sunilksundaram/cocoon-sandbox#readme"
 [tool.maturin]
 manifest-path = "crates/cocoon-cli/Cargo.toml"
 bindings = "bin"
+python-source = "python"
+module-name = "cocoon"
 strip = true
 

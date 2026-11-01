@@ -87,6 +87,14 @@ impl Default for ResourceLimits {
     }
 }
 
+/// A live streaming chunk emitted during execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum StreamChunk {
+    Stdout(String),
+    Stderr(String),
+}
+
 /// Specification for a sandbox execution session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
@@ -110,6 +118,9 @@ pub struct SandboxConfig {
     pub limits: ResourceLimits,
     /// Optional stdin input to feed into the process
     pub stdin_data: Option<Vec<u8>>,
+    /// Optional channel sender to stream live output chunks in real time
+    #[serde(skip)]
+    pub stream_sender: Option<std::sync::mpsc::Sender<StreamChunk>>,
 }
 
 impl Default for SandboxConfig {
@@ -125,6 +136,7 @@ impl Default for SandboxConfig {
             mounts: Vec::new(),
             limits: ResourceLimits::default(),
             stdin_data: None,
+            stream_sender: None,
         }
     }
 }

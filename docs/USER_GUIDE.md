@@ -892,3 +892,106 @@ When integrating Cocoon into an agent framework (LangChain, AutoGen, CrewAI, Cla
   - Document skill execution (e.g., Excel/Word tools) should be invoked via dedicated tools where the chassis hardcodes `-r python-skill`, mounts the specific input files `--ro`, and directs output to the session `--work` tree.
   - The model's tool schema should only receive `code: string`.
 
+---
+
+## 12. Model Context Protocol (MCP) Integration (`cocoon mcp`)
+
+Cocoon includes a native, zero-dependency **Model Context Protocol (MCP)** server over standard I/O (`stdio`). This enables instant integration with **Claude Desktop, Cursor, Antigravity, Windsurf, and custom MCP clients**.
+
+### Configuration for Claude Desktop / Cursor / Antigravity
+
+Add the following to your `claude_desktop_config.json` or client settings:
+
+```json
+{
+  "mcpServers": {
+    "cocoon": {
+      "command": "cocoon",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Exposed MCP Tools
+
+The Cocoon MCP server inherently enforces the **Chassis Boundary**: the LLM cannot pass dangerous flags (`--allow-network` or mount overrides).
+
+1. `execute_code`: Executes untrusted code in an isolated standard-library sandbox with no network.
+   - Arguments: `code` (string, required), `runtime` (string, optional: python, node, bun, deno, go, rust, pwsh, bash, ruby, php, lua), `timeout` (integer, optional, default: 30).
+2. `execute_skill`: Executes document processing tasks (openpyxl, pandas, python-docx, pypdf) with read-only file mounts.
+   - Arguments: `code` (string, required), `input_files` (array of strings, optional), `timeout` (integer, optional, default: 60).
+3. `inspect_runtimes`: Returns detected compilers, interpreters, and driver health on the host.
+
+---
+
+## 13. Native Python Client SDK (`import cocoon`)
+
+For Python-based AI agent frameworks (LangChain, AutoGen, CrewAI, LlamaIndex), Cocoon provides a lightweight, typed Python client:
+
+```python
+import cocoon
+
+# 1. Execute untrusted Python code in isolated standard library mode
+result = cocoon.run("print(2 + 2)", runtime="python")
+print(result.stdout)       # "4\n"
+print(result.exit_code)    # 0
+print(result.success)      # True
+print(result.duration_ms)  # 18.4
+
+# 2. Document Processing with Read-Only Mounts (python-skill)
+report = cocoon.run(
+    code="""
+import pandas as pd
+df = pd.read_excel('data/sales.xlsx')
+print('Total Revenue:', df['Revenue'].sum())
+""",
+    runtime="python-skill",
+    ro=["./data"],
+    timeout=60,
+    mem=2048
+)
+print(report.stdout)
+
+# 3. Polyglot Pipeline across multiple runtimes
+pipe = cocoon.pipeline([
+    "node:require('fs').writeFileSync('data.json', JSON.stringify({count: 42}))",
+    "python:import json; print('Parsed:', json.load(open('data.json'))['count'])",
+])
+print("Pipeline Success:", pipe.success)
+```
+
+---
+
+## 14. Environment Diagnostic (`cocoon doctor`)
+
+Verify sandbox security drivers, ACL engines, and installed compilers with a single command:
+
+```bash
+cocoon doctor
+```
+
+Or machine-readable JSON for automated deployment verification:
+```bash
+cocoon doctor --json
+```
+
+---
+
+## 15. Real-Time Streaming Output (`--stream`)
+
+For long-running tasks, SLM fine-tuning, or batch conversions, pass `--stream` to receive chunked NDJSON events as they occur in real time:
+
+```bash
+cocoon run -r node -c "console.log('Step 1 complete'); console.log('Step 2 complete');" --stream
+```
+
+**Stream Event Output:**
+```json
+{"event":"start","executable":"C:\\Program Files\\nodejs\\node.exe"}
+{"data":"Step 1 complete\n","event":"stdout"}
+{"data":"Step 2 complete\n","event":"stdout"}
+{"event":"complete","exit_code":0,"duration_ms":145.2,"timed_out":false,"oom_killed":false,"peak_memory_mb":18}
+```
+
+

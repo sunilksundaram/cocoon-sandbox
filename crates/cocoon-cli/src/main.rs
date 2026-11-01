@@ -8,6 +8,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod doctor;
+mod mcp;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "cocoon",
@@ -97,6 +100,10 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
 
+        /// Stream output in real-time as NDJSON events
+        #[arg(long = "stream")]
+        stream: bool,
+
         /// Explicit command and trailing arguments (if not using --runtime)
         #[arg(last = true)]
         raw_cmd: Vec<String>,
@@ -164,6 +171,16 @@ enum Commands {
 
     /// Display host sandbox capabilities, driver status, and detected runtimes
     Info,
+
+    /// Diagnose sandbox environment, verify security drivers, and inspect installed runtimes
+    Doctor {
+        /// Output diagnostic report as JSON
+        #[arg(long = "json")]
+        json: bool,
+    },
+
+    /// Launch Model Context Protocol (MCP) stdio server for AI agent integrations (Claude Desktop, Antigravity, Cursor)
+    Mcp,
 }
 
 #[derive(Serialize)]
@@ -248,6 +265,10 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Commands::Doctor { json } => doctor::run_doctor(driver, json),
+
+        Commands::Mcp => mcp::run_mcp_server(driver),
+
         Commands::Run {
             read_only,
             read_write,
@@ -265,6 +286,7 @@ fn main() -> Result<()> {
             cpu_pct,
             no_gpu,
             json,
+            stream,
             raw_cmd,
         } => {
             let mut mounts = Vec::new();
@@ -319,7 +341,14 @@ fn main() -> Result<()> {
                 allow_gpu: !no_gpu,
             };
 
-            let config = SandboxConfig {
+            let (stream_tx, stream_rx) = if stream {
+                let (tx, rx) = std::sync::mpsc::channel();
+                (Some(tx), Some(rx))
+            } else {
+                (None, None)
+            };
+
+            let mut config = SandboxConfig {
                 executable,
                 args,
                 working_dir: workdir,
@@ -330,11 +359,72 @@ fn main() -> Result<()> {
                 mounts,
                 limits,
                 stdin_data: None,
+                stream_sender: stream_tx,
+            };
+
+            let stream_handle = if let Some(rx) = stream_rx {
+                let exe_name = config.executable.to_string_lossy().to_string();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "start",
+                        "executable": exe_name
+                    })
+                );
+                let handle = std::thread::spawn(move || {
+                    while let Ok(chunk) = rx.recv() {
+                        match chunk {
+                            cocoon_core::StreamChunk::Stdout(data) => {
+                                println!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "event": "stdout",
+                                        "data": data
+                                    })
+                                );
+                            }
+                            cocoon_core::StreamChunk::Stderr(data) => {
+                                println!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "event": "stderr",
+                                        "data": data
+                                    })
+                                );
+                            }
+                        }
+                    }
+                });
+                Some(handle)
+            } else {
+                None
             };
 
             let result = driver
                 .execute(&config)
                 .context("Sandbox execution failed")?;
+
+            // Critical: Drop the channel sender held by config so the stream reader thread exits!
+            let _ = config.stream_sender.take();
+
+            if let Some(h) = stream_handle {
+                let _ = h.join();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "complete",
+                        "exit_code": result.exit_code,
+                        "duration_ms": result.duration_ms,
+                        "timed_out": result.timed_out,
+                        "oom_killed": result.oom_killed,
+                        "peak_memory_mb": result.peak_memory_mb,
+                        "termination_reason": result.termination_reason,
+                        "stdout_truncated": result.stdout_truncated,
+                        "stderr_truncated": result.stderr_truncated,
+                    })
+                );
+                return Ok(());
+            }
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -448,6 +538,7 @@ fn main() -> Result<()> {
                         allow_gpu: !no_gpu,
                     },
                     stdin_data: None,
+                    stream_sender: None,
                 };
 
                 if !json {

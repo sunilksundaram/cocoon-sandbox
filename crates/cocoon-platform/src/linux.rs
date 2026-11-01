@@ -95,7 +95,7 @@ impl SandboxDriver for LinuxNamespaceDriver {
             cmd.current_dir(wd);
         } else if !config.stage_copies.is_empty() {
             cmd.current_dir(vfs.scratchpad.workspace());
-        } else if let Some(first_mount) = config.mounts.first() {
+        } else if let Some(first_mount) = config.mounts.first().filter(|m| m.host_path.is_dir()) {
             cmd.current_dir(&first_mount.host_path);
         } else {
             cmd.current_dir(vfs.scratchpad.workspace());
@@ -227,6 +227,9 @@ impl SandboxDriver for LinuxNamespaceDriver {
         let (stdout_tx, stdout_rx) = mpsc::channel();
         let (stderr_tx, stderr_rx) = mpsc::channel();
 
+        let stream_tx_out = config.stream_sender.clone();
+        let stream_tx_err = config.stream_sender.clone();
+
         if let Some(mut out) = stdout_handle.take() {
             thread::spawn(move || {
                 let mut buf = Vec::new();
@@ -236,6 +239,11 @@ impl SandboxDriver for LinuxNamespaceDriver {
                     match out.read(&mut chunk) {
                         Ok(0) => break,
                         Ok(n) => {
+                            if let Some(ref stx) = stream_tx_out {
+                                let _ = stx.send(cocoon_core::StreamChunk::Stdout(
+                                    String::from_utf8_lossy(&chunk[..n]).to_string(),
+                                ));
+                            }
                             if buf.len() + n <= max_output {
                                 buf.extend_from_slice(&chunk[..n]);
                             } else {
@@ -264,6 +272,11 @@ impl SandboxDriver for LinuxNamespaceDriver {
                     match err.read(&mut chunk) {
                         Ok(0) => break,
                         Ok(n) => {
+                            if let Some(ref stx) = stream_tx_err {
+                                let _ = stx.send(cocoon_core::StreamChunk::Stderr(
+                                    String::from_utf8_lossy(&chunk[..n]).to_string(),
+                                ));
+                            }
                             if buf.len() + n <= max_output {
                                 buf.extend_from_slice(&chunk[..n]);
                             } else {
