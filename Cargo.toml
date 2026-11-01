@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["Sunil K Sundaram"]
 license = "MIT"
@@ -17,10 +17,10 @@ description = "A lightweight cross-platform sandbox with virtual and read-only f
 repository = "https://github.com/sunilksundaram/cocoon-sandbox"
 
 [workspace.dependencies]
-cocoon-core = { version = "0.2.1", path = "crates/cocoon-core" }
-cocoon-fs = { version = "0.2.1", path = "crates/cocoon-fs" }
-cocoon-platform = { version = "0.2.1", path = "crates/cocoon-platform" }
-cocoon-runtimes = { version = "0.2.1", path = "crates/cocoon-runtimes" }
+cocoon-core = { version = "0.2.2", path = "crates/cocoon-core" }
+cocoon-fs = { version = "0.2.2", path = "crates/cocoon-fs" }
+cocoon-platform = { version = "0.2.2", path = "crates/cocoon-platform" }
+cocoon-runtimes = { version = "0.2.2", path = "crates/cocoon-runtimes" }
 
 anyhow = "1.0"
 thiserror = "2.0"

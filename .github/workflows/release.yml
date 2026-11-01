@@ -25,10 +25,58 @@ permissions:
 
 jobs:
   # =============================================================
+  # 0. PRE-RELEASE TEST GATE: CVE AUDIT & CROSS-PLATFORM TESTS
+  # Releases to PyPI and Crates.io will NEVER execute unless all
+  # tests, static analysis, and CVE scans pass across all OSes.
+  # =============================================================
+  test-gate-cve:
+    name: Pre-Release CVE Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Security audit with RustSec (CVE Scanner)
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  test-gate-matrix:
+    name: Pre-Release Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting (rustfmt)
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Static Analysis (clippy)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Workspace Compilation Check
+        run: cargo check --all-targets
+
+      - name: Execute Unit & Regression Tests
+        run: cargo test --all --verbose
+
+  # =============================================================
   # 1. BUILD STANDALONE BINARIES & PUSH TO GITHUB RELEASES
   # =============================================================
   build-binaries:
     name: Build Binary (${{ matrix.target }})
+    needs: [test-gate-cve, test-gate-matrix]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -95,7 +143,7 @@ jobs:
 
   github-release:
     name: Push to GitHub Releases
-    needs: [build-binaries]
+    needs: [test-gate-cve, test-gate-matrix, build-binaries]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_github_release == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -125,6 +173,7 @@ jobs:
   # =============================================================
   build-pypi-wheels:
     name: Build Wheel (${{ matrix.target }})
+    needs: [test-gate-cve, test-gate-matrix]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_pypi == 'true')
     runs-on: ${{ matrix.os }}
     strategy:
@@ -164,6 +213,7 @@ jobs:
 
   build-pypi-sdist:
     name: Build PyPI Source Distribution
+    needs: [test-gate-cve, test-gate-matrix]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_pypi == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -187,7 +237,7 @@ jobs:
 
   publish-pypi:
     name: Push to PyPI
-    needs: [build-pypi-wheels, build-pypi-sdist]
+    needs: [test-gate-cve, test-gate-matrix, build-pypi-wheels, build-pypi-sdist]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_pypi == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -211,9 +261,11 @@ jobs:
 
   # =============================================================
   # 3. PUSH TO CRATES.IO
+  # Must wait for test gates, binary builds, and PyPI publication.
   # =============================================================
   publish-crates:
     name: Push to Crates.io
+    needs: [test-gate-cve, test-gate-matrix, build-binaries, publish-pypi]
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_crates == 'true')
     runs-on: ubuntu-latest
     steps:

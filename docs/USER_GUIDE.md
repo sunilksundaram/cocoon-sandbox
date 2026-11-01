@@ -1080,18 +1080,27 @@ flowchart LR
 
 ### 3. Automated Multi-Platform Release Pipeline (`.github/workflows/release.yml`)
 
-Triggered automatically whenever a version tag (`v*`) is pushed to GitHub:
+Triggered automatically whenever a version tag (`v*`) is pushed to GitHub.
+
+> [!IMPORTANT]
+> **Strict Pre-Release Test Gate**: Standalone binary packaging, PyPI publishing, and Crates.io uploads **NEVER** execute unless all unit tests, regression tests, static analysis, and CVE vulnerability scans pass 100% across Ubuntu, Windows, and macOS. Crates.io and PyPI releases are gated until all test matrix jobs succeed.
 
 ```mermaid
 flowchart TD
-    T["git push origin v0.2.1"] --> B["Build Standalone Binaries"]
-    T --> W["Build Python Wheels (Maturin)"]
-    T --> S["Build Source Dist (sdist)"]
+    T["git push origin v0.2.2"] --> Gate1["0a. Pre-Release CVE Audit (RustSec)"]
+    T --> Gate2["0b. Pre-Release Test Matrix (Ubuntu, Windows, macOS)"]
 
-    B --> Rel["GitHub Releases\n(Tarballs & Zips)"]
-    W --> PyPI["Publish to PyPI\n(Universal & Arch Wheels)"]
-    S --> PyPI
-    T --> Crates["Publish to Crates.io\n(Cargo Packages)"]
+    Gate1 --> Gate["All Pre-Release Tests Pass (Fail-Fast)"]
+    Gate2 --> Gate
+
+    Gate --> B["1. Build Standalone Binaries (5 targets)"]
+    Gate --> W["2. Build Python Wheels & Sdist (Maturin)"]
+
+    B --> Rel["3. Create GitHub Release & Checksums"]
+    W --> PyPI["4. Publish to PyPI (cocoon-sandbox)"]
+
+    Rel --> Crates["5. Publish to Crates.io (Dependency Order)"]
+    PyPI --> Crates
 ```
 
 #### Built Binary Targets:
@@ -1119,7 +1128,7 @@ When ready to release a new version:
 
 ```bash
 # Step 1: Bump version in Cargo.toml, pyproject.toml, and python/cocoon/__init__.py
-# (e.g. 0.2.0 -> 0.2.1)
+# (e.g. 0.2.1 -> 0.2.2)
 
 # Step 2: Update Cargo.lock
 cargo check
@@ -1129,15 +1138,15 @@ cargo test --all-targets
 
 # Step 4: Commit changes and tag
 git add -A
-git commit -m "chore(release): bump version to 0.2.1"
-git tag -a v0.2.1 -m "Release v0.2.1: Doctor, MCP Server, Streaming, macOS Seatbelt, Python SDK, Architect Skill"
+git commit -m "chore(release): bump version to 0.2.2"
+git tag -a v0.2.2 -m "Release v0.2.2: macOS fixes, gated release workflow, and CI/CD user guide"
 
 # Step 5: Push main branch and tag to remote
 git push origin main
-git push origin v0.2.1
+git push origin v0.2.2
 ```
 
-Once pushed, GitHub Actions automatically builds, packages, tests, and publishes the release assets across all destinations.
+Once pushed, GitHub Actions runs the pre-release test gates on Ubuntu, Windows, and macOS. Only when all tests pass are binaries built, PyPI updated, and crates published to Crates.io.
 
 
 
