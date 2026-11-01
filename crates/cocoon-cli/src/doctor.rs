@@ -101,6 +101,13 @@ pub fn generate_doctor_report(driver: Arc<dyn SandboxDriver>) -> DoctorReport {
             passed: true,
             detail: "Job & Process memory hard-limits supported".into(),
         });
+
+        checks.push(DoctorCheck {
+            category: "Windows Security".into(),
+            name: "Network Isolation (Cooperative Proxy Sink)".into(),
+            passed: true,
+            detail: "HTTP/HTTPS sinks to 127.0.0.1:0. For raw socket refusal, run inside Docker (--network none) or behind a host firewall.".into(),
+        });
     }
 
     #[cfg(target_os = "linux")]

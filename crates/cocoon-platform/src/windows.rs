@@ -262,6 +262,14 @@ impl SandboxDriver for WindowsJobObjectDriver {
 
         // Enforce network isolation in environment if disabled
         if !config.limits.allow_network {
+            // Note: On bare-metal Windows, Job Objects do not provide unprivileged network namespace severance.
+            // Network isolation is enforced via cooperative proxy sinking (127.0.0.1:0) and runtime offline flags.
+            // Raw sockets that ignore proxy variables are not blocked by the Windows driver.
+            // For production environments requiring strict raw socket refusal, run Cocoon inside Docker
+            // (--network none) or behind host-level Windows Filtering Platform (WFP) firewall rules.
+            tracing::debug!(
+                "Windows network isolation active via cooperative proxy sinking (127.0.0.1:0). Raw sockets require Docker or WFP firewall."
+            );
             cmd.env("HTTP_PROXY", "http://127.0.0.1:0");
             cmd.env("HTTPS_PROXY", "http://127.0.0.1:0");
             cmd.env("ALL_PROXY", "socks5://127.0.0.1:0");
@@ -524,7 +532,9 @@ pub struct AppContainerProfile {
 }
 
 impl AppContainerProfile {
-    /// Creates an ephemeral AppContainer with 0 capabilities (blocks all network access at kernel level)
+    /// Experimental AppContainer helper. Note: In current Windows execute(), network isolation
+    /// relies on cooperative proxy sinking. Raw socket blocking on Windows requires running
+    /// inside a Linux container (Docker --network none) or host-level WFP firewall rules.
     pub fn create(profile_name: &str) -> Result<Self, CocoonError> {
         let name_wide: Vec<u16> = profile_name.encode_utf16().chain(Some(0)).collect();
         let mut sid: PSID = std::ptr::null_mut();
